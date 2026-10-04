@@ -109,7 +109,9 @@ async def test_a_printed_code128_label_scans_back_to_its_part(client, auth_heade
 
     # Same shape, wrong digits: must not resolve to some other part.
     bogus = "4988600" + "0" * 12
-    assert (await client.get(f"/api/v1/barcodes/lookup/{bogus}", headers=auth_headers)).status_code == 404
+    assert (
+        await client.get(f"/api/v1/barcodes/lookup/{bogus}", headers=auth_headers)
+    ).status_code == 404
 
 
 @pytest.mark.asyncio

@@ -317,6 +317,11 @@ export const authAPI = {
       credentials: 'include',
     }),
 
+  // POST /auth/revoke-all: records a revoked-before time every token check
+  // honours, so ALL of this user's sessions end at once, this one included
+  // (the server also clears this browser's cookies). Rate-limited 2/minute.
+  revokeAll: () => apiRequest('/auth/revoke-all', { method: 'POST' }),
+
   // POST /auth/change-password { current_password, new_password }
   changePassword: (currentPassword, newPassword) =>
     apiRequest('/auth/change-password', {
@@ -1064,6 +1069,15 @@ export const contractAPI = {
   pricing: (contractId, partId) => {
     const q = partId ? `?partId=${partId}` : '';
     return apiRequest(`/contracts/${contractId}/pricing${q}`);
+  },
+  // Cross-contract list. Every filter is a QUERY param (contractId, partId,
+  // vendorId, skip, limit): FastAPI binds bare scalars to the query string,
+  // so sending them as a JSON body would be silently ignored.
+  listPricingAgreements: (filters = {}) => {
+    const q = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v != null && v !== ''),
+    ).toString();
+    return apiRequest(`/contracts/pricing-agreements/all${q ? '?' + q : ''}`);
   },
   createPricingAgreement: (data) => apiRequest('/contracts/pricing-agreements', { method: 'POST', body: JSON.stringify(data) }),
   updatePricingAgreement: (id, data) => apiRequest(`/contracts/pricing-agreements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),

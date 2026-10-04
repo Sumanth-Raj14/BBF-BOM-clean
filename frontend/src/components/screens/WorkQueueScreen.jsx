@@ -2,7 +2,7 @@ import React from "react";
 
 import { __t } from "../../i18n";
 import { toast } from "../../utils/toast";
-import { apiRequest } from "../../../api.js";
+import { api, apiRequest } from "../../../api.js";
 import {
   ScreenHeader,
   Tabs,
@@ -13,6 +13,7 @@ import {
   StatusPill,
   EmptyState,
   Spinner,
+  Modal,
 } from "../ui";
 
 // WS2 — unified "My Work / Team Work" board wired to /work/* + /teams/* .
@@ -25,6 +26,7 @@ export default function WorkQueueScreen() {
   const [items, setItems] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
+  const [membersOpen, setMembersOpen] = React.useState(false);
 
   const loadTeams = React.useCallback(async () => {
     try {
@@ -179,11 +181,23 @@ export default function WorkQueueScreen() {
                 ))}
               </Select>
             )}
+            {tab === "team" && selectedTeam && (
+              <Button variant="secondary" onClick={() => setMembersOpen(true)}>
+                {__t("work.members") || "Members"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={createTeam}>
               + New team
             </Button>
           </div>
         }
+      />
+
+      <TeamMembersModal
+        open={membersOpen}
+        team={teams.find((t) => t.id === selectedTeam) || null}
+        onClose={() => setMembersOpen(false)}
+        onChanged={loadTeams}
       />
 
       <Tabs
@@ -236,3 +250,157 @@ export default function WorkQueueScreen() {
 WorkQueueScreen.displayName = "WorkQueueScreen";
 // Self-register on window so LazyScreens can resolve it after dynamic import.
 window.WorkQueueScreen = WorkQueueScreen;
+
+// Who is on a team, plus add and remove.
+//
+// GET/POST/DELETE /teams/{id}/members had no caller: a team could be created
+// (and its creator made lead) but nobody could ever be added to it, so "Team
+// Work" only ever showed the creator's own items. The server only accepts
+// users from the caller's tenant, and roles "member" or "lead".
+function TeamMembersModal({ open, team, onClose, onChanged }) {
+  const [members, setMembers] = React.useState(null);
+  const [users, setUsers] = React.useState([]);
+  const [userId, setUserId] = React.useState("");
+  const [role, setRole] = React.useState("member");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+
+  const loadMembers = React.useCallback(async () => {
+    if (!team) return;
+    setError(null);
+    try {
+      const list = await apiRequest(`/teams/${team.id}/members`);
+      setMembers(Array.isArray(list) ? list : []);
+    } catch (e) {
+      setError(e?.message || String(e));
+      setMembers([]);
+    }
+  }, [team]);
+
+  React.useEffect(() => {
+    if (!open || !team) return;
+    setMembers(null);
+    setUserId("");
+    setRole("member");
+    loadMembers();
+    api.users
+      .list({ per_page: 200 })
+      .then((res) => setUsers(res?.items || res?.data || (Array.isArray(res) ? res : [])))
+      .catch(() => setUsers([]));
+  }, [open, team, loadMembers]);
+
+  if (!open || !team) return null;
+
+  const memberIds = new Set((members || []).map((m) => m.user_id));
+  const candidates = users.filter((u) => !memberIds.has(u.id));
+  const label = (u) => u.fullName || u.username || u.email || `#${u.id}`;
+
+  async function add() {
+    if (!userId) return;
+    setBusy(true);
+    try {
+      const res = await apiRequest(`/teams/${team.id}/members`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: Number(userId), role }),
+      });
+      if (res?.status === "exists") {
+        toast(__t("work.alreadyMember") || "Already on this team", { kind: "info" });
+      }
+      setUserId("");
+      await loadMembers();
+      onChanged();
+    } catch (e) {
+      toast(e?.message || String(e), { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(m) {
+    if (!window.confirm(`${__t("work.confirmRemoveMember") || "Remove from team"}: ${m.name || m.email}?`)) {
+      return;
+    }
+    try {
+      await apiRequest(`/teams/${team.id}/members/${m.user_id}`, { method: "DELETE" });
+      await loadMembers();
+      onChanged();
+    } catch (e) {
+      toast(e?.message || String(e), { kind: "error" });
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${team.name} · ${__t("work.members") || "Members"}`}
+      closeLabel={__t("common.close") || "Close"}
+    >
+      {error && (
+        <p className="fs-12" role="alert" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
+      )}
+      {members === null ? (
+        <Spinner size="sm" label={__t("common.loading") || "Loading…"} />
+      ) : members.length === 0 ? (
+        <EmptyState title={__t("work.noMembers") || "Nobody is on this team yet"} />
+      ) : (
+        <DataTable
+          dense
+          ariaLabel={__t("work.members") || "Team members"}
+          rows={members.map((m) => ({ ...m, id: m.user_id }))}
+          columns={[
+            { key: "name", header: __t("common.name") || "Name" },
+            { key: "email", header: __t("common.email") || "Email" },
+            {
+              key: "role",
+              header: __t("common.role") || "Role",
+              render: (m) => <StatusPill status={m.role} />,
+            },
+            {
+              key: "actions",
+              header: "",
+              render: (m) => (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => remove(m)}
+                  aria-label={`${__t("common.remove") || "Remove"} ${m.name || m.email}`}
+                >
+                  {__t("common.remove") || "Remove"}
+                </Button>
+              ),
+            },
+          ]}
+        />
+      )}
+
+      <div className="flex items-center gap-8" style={{ marginTop: 14 }}>
+        <Select
+          aria-label={__t("work.addWho") || "Person to add"}
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+        >
+          <option value="">{__t("work.pickPerson") || "Add a person…"}</option>
+          {candidates.map((u) => (
+            <option key={u.id} value={u.id}>
+              {label(u)}
+            </option>
+          ))}
+        </Select>
+        <Select
+          aria-label={__t("common.role") || "Role"}
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        >
+          <option value="member">{__t("work.roleMember") || "Member"}</option>
+          <option value="lead">{__t("work.roleLead") || "Lead"}</option>
+        </Select>
+        <Button variant="primary" onClick={add} disabled={busy || !userId}>
+          {__t("common.add") || "Add"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}

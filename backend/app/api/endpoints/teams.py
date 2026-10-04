@@ -1,6 +1,6 @@
 """Teams + team membership API (WS2)."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -22,7 +22,9 @@ class TeamCreate(BaseModel):
 
 class MemberAdd(BaseModel):
     user_id: int
-    role: str = "member"
+    # The two roles the app knows (create_team makes the creator "lead"). Any
+    # string used to be stored as-is.
+    role: Literal["member", "lead"] = "member"
 
 
 def _team_dict(t: Team, member_count: int) -> dict:
@@ -127,6 +129,16 @@ async def add_member(
     )
     if result.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Team not found")
+
+    # The USER must be in the caller's tenant too. Only the team used to be
+    # checked, so any user id could be added -- and list_members would then
+    # hand back another tenant's user's email and name. Same 404 as an id that
+    # does not exist, so it does not confirm the user exists elsewhere.
+    in_tenant = await db.execute(
+        select(User.id).where(User.id == body.user_id, User.tenantId == user.tenantId)
+    )
+    if in_tenant.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="User not found")
 
     existing = await db.execute(
         select(TeamMember).where(
