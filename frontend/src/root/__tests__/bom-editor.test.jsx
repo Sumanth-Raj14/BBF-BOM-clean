@@ -276,3 +276,52 @@ describe("BomEditor line-item media / visibility (migration 045)", () => {
     );
   });
 });
+
+// Custom bom_item columns are INSTANCE data. They used to be written to the
+// global Part (parts.update -> customFields), so a value set on one line
+// silently changed on every BOM using that part.
+describe("BomEditor per-line custom attributes", () => {
+  const DEF = { id: 7, name: "rohs_ok", display_name: "RoHS OK", data_type: "boolean" };
+
+  beforeEach(() => {
+    window.apiRequest = vi.fn((url) =>
+      Promise.resolve(url.startsWith("/enterprise/custom-attributes") ? [DEF] : []),
+    );
+    bomEnterpriseItems.customAttributes = vi
+      .fn()
+      .mockResolvedValue([{ attribute_definition_id: 7, value: null }]);
+    bomEnterpriseItems.setCustomAttribute = vi.fn().mockResolvedValue({});
+  });
+
+  it("writes a line's value to the per-line store, never to the global Part", async () => {
+    render(<Harness initialRows={[makeRow({ partId: 9 })]} />);
+    const toggle = await screen.findByRole("switch", { name: /RoHS OK PN-1/i });
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(bomEnterpriseItems.setCustomAttribute).toHaveBeenCalledWith(42, 501, 7, "true"),
+    );
+    expect(window.api.parts.update).not.toHaveBeenCalled();
+  });
+
+  it("loads per-line values and shows them over a stale Part-level value", async () => {
+    bomEnterpriseItems.customAttributes.mockResolvedValue([
+      { attribute_definition_id: 7, value: "true" },
+    ]);
+    render(<Harness initialRows={[makeRow({ customFields: { rohs_ok: false } })]} />);
+    const toggle = await screen.findByRole("switch", { name: /RoHS OK PN-1/i });
+
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    expect(bomEnterpriseItems.customAttributes).toHaveBeenCalledWith(42, 501);
+  });
+
+  it("keeps an unsaved line's edit local rather than pushing it to the Part", async () => {
+    render(<Harness initialRows={[makeRow({ bomItemId: null, partId: 9 })]} />);
+    const toggle = await screen.findByRole("switch", { name: /RoHS OK PN-1/i });
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    expect(bomEnterpriseItems.setCustomAttribute).not.toHaveBeenCalled();
+    expect(window.api.parts.update).not.toHaveBeenCalled();
+  });
+});

@@ -317,6 +317,11 @@ export const authAPI = {
       credentials: 'include',
     }),
 
+  // POST /auth/revoke-all: records a revoked-before time every token check
+  // honours, so ALL of this user's sessions end at once, this one included
+  // (the server also clears this browser's cookies). Rate-limited 2/minute.
+  revokeAll: () => apiRequest('/auth/revoke-all', { method: 'POST' }),
+
   // POST /auth/change-password { current_password, new_password }
   changePassword: (currentPassword, newPassword) =>
     apiRequest('/auth/change-password', {
@@ -358,7 +363,11 @@ export const partsAPI = {
     const query = new URLSearchParams(params).toString();
     return apiRequest(`/parts${query ? '?' + query : ''}`);
   },
-  
+
+  // Server-side, tenant-scoped; returns { deleted } (the number removed).
+  bulkDelete: (ids) =>
+    apiRequest('/parts/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
+
   get: (id) => apiRequest(`/parts/${id}`),
   
   create: (part) => 
@@ -408,7 +417,11 @@ export const vendorsAPI = {
     const query = new URLSearchParams(params).toString();
     return apiRequest(`/vendors${query ? '?' + query : ''}`);
   },
-  
+
+  // Server-side, tenant-scoped; returns { deleted } (the number removed).
+  bulkDelete: (ids) =>
+    apiRequest('/vendors/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
+
   get: (id) => apiRequest(`/vendors/${id}`),
   
   create: (vendor) => 
@@ -604,8 +617,12 @@ export const notificationsAPI = {
       body: JSON.stringify(data),
     }),
   
-  delete: (id) => 
+  delete: (id) =>
     apiRequest(`/notifications/${id}`, { method: 'DELETE' }),
+
+  // Only ever deletes the caller's own notifications (scoped by userId).
+  bulkDelete: (ids) =>
+    apiRequest('/notifications/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
 };
 
 // Comments API
@@ -779,8 +796,26 @@ export const barcodesAPI = {
     return apiRequest(`/barcodes/generate/${partId}?format=${format}`);
   },
   
-  lookup: async (barcode) => {
-    return apiRequest(`/barcodes/lookup/${barcode}`);
+  // Both scanners (BarcodeScanModal, the mobile scanner) resolve through here.
+  // Labels printed from /barcodes/qr encode "PN:<pn>|ID:<id>|Name:<name>", so
+  // reduce that to the PN or the app could not read its own labels; a plain
+  // barcode passes through unchanged. Encoded, since scanned codes can carry
+  // spaces and other characters that are not path-safe.
+  lookup: async (scanned) => {
+    const raw = String(scanned || '').trim();
+    const code = raw.startsWith('PN:') ? raw.slice(3).split('|')[0] : raw;
+    return apiRequest(`/barcodes/lookup/${encodeURIComponent(code)}`);
+  },
+
+  // A printable label as a Blob: kind 'qr' (PNG) or 'code128' (SVG). Both
+  // encode something lookup() resolves back to the part. Fetched directly:
+  // apiRequest parses JSON, and a bare <img src> may not carry credentials
+  // when the API is on another origin.
+  labelImage: async (partId, kind) => {
+    const path = kind === 'qr' ? `/barcodes/qr/${partId}` : `/barcodes/image/${partId}?format=code128`;
+    const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+    if (!response.ok) throw new Error(`Could not load the ${kind} label (HTTP ${response.status})`);
+    return response.blob();
   },
   
   // Removed: assign() and batchGenerate() called /barcodes/assign/{id} and
@@ -1035,6 +1070,15 @@ export const contractAPI = {
     const q = partId ? `?partId=${partId}` : '';
     return apiRequest(`/contracts/${contractId}/pricing${q}`);
   },
+  // Cross-contract list. Every filter is a QUERY param (contractId, partId,
+  // vendorId, skip, limit): FastAPI binds bare scalars to the query string,
+  // so sending them as a JSON body would be silently ignored.
+  listPricingAgreements: (filters = {}) => {
+    const q = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v != null && v !== ''),
+    ).toString();
+    return apiRequest(`/contracts/pricing-agreements/all${q ? '?' + q : ''}`);
+  },
   createPricingAgreement: (data) => apiRequest('/contracts/pricing-agreements', { method: 'POST', body: JSON.stringify(data) }),
   updatePricingAgreement: (id, data) => apiRequest(`/contracts/pricing-agreements/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deletePricingAgreement: (id) => apiRequest(`/contracts/pricing-agreements/${id}`, { method: 'DELETE' }),
@@ -1268,6 +1312,15 @@ export const bomEnterpriseAPI = {
     update: (bomId, itemId, data) => apiRequest(`/bom/${bomId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (bomId, itemId) => apiRequest(`/bom/${bomId}/items/${itemId}`, { method: 'DELETE' }),
     reorder: (bomId, itemIds) => apiRequest(`/bom/${bomId}/items/reorder`, { method: 'POST', body: JSON.stringify({ item_ids: itemIds }) }),
+    // Per-LINE custom attribute values (BomItemCustomValue). Instance data:
+    // the same part can carry a different value on each BOM it appears in.
+    // `value` is a string on the wire (or null to clear) — callers serialize.
+    customAttributes: (bomId, itemId) => apiRequest(`/bom/${bomId}/items/${itemId}/custom-attributes`),
+    setCustomAttribute: (bomId, itemId, attributeDefinitionId, value) =>
+      apiRequest(`/bom/${bomId}/items/${itemId}/custom-attributes`, {
+        method: 'PUT',
+        body: JSON.stringify({ attribute_definition_id: attributeDefinitionId, value }),
+      }),
   },
   snapshots: {
     list: (bomId) => apiRequest(`/bom/${bomId}/snapshots`),

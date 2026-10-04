@@ -25,6 +25,7 @@ import { toast } from "../utils/toast";
 import {
   AuthScreen,
   SSOCallbackScreen,
+  ResetPasswordScreen,
   Drawer,
   ErrorBoundary,
   ErrorScreen,
@@ -362,6 +363,13 @@ function AppShell() {
         }}
       />
     );
+  }
+
+  // The emailed password-reset link lands here. Like auth/callback, the user
+  // is not signed in, so this must render before the authed/authChecking
+  // gates — and after every hook above, for the same hook-order reason.
+  if (route === "auth/reset-password") {
+    return <ResetPasswordScreen />;
   }
 
   if (authChecking) {

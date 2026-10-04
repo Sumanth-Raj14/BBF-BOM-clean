@@ -333,19 +333,20 @@ ThumbCell.propTypes = {
   onSaved: PropTypes.func,
 };
 // Ad-hoc custom columns for entity_type='bom_item' attribute definitions
-// (custom_attribute_definitions — see enterprise_ext_api.py). That system
-// only stores DEFINITIONS (name/type/options), never per-instance VALUES —
-// there is no bom-item-scoped value table. The one value store that already
-// round-trips to the server end-to-end is Part.customFields (a JSON column,
-// wired via api.parts.update — same field the detail drawer's "Custom
-// Fields" section reads). So for a Part-backed row, values are read/written
-// through row.customFields keyed by the attribute's name; for a purely
-// local/unsaved row (no partId yet) the edit is local-only + autosave-
-// drafted, same limitation every other field has on an unconfirmed new row.
+// (custom_attribute_definitions — see enterprise_ext_api.py). Values are
+// per-LINE (BomItemCustomValue, via /bom/{id}/items/{item}/custom-attributes)
+// and live on row.customValues keyed by definition id. They used to be stored
+// on Part.customFields, which leaked one line's value onto every BOM using
+// the part; that store is now only READ, as a fallback for legacy values.
 function CustomAttrCell({ row, def, onCommit }) {
   const key = def.name || def.attribute_name;
   const dataType = def.data_type || def.attribute_type;
-  const value = row.customFields ? row.customFields[key] : undefined;
+  // Per-line value first (BomItemCustomValue, keyed by definition id). Fall
+  // back to the legacy Part-level value so data written before the per-line
+  // store existed stays visible instead of silently disappearing.
+  const lineValue = row.customValues ? row.customValues[def.id] : undefined;
+  const value =
+    lineValue !== undefined ? lineValue : row.customFields ? row.customFields[key] : undefined;
   const options = def.options_normalized || [];
   if (dataType === "boolean") {
     return (
@@ -436,7 +437,7 @@ export function BomEditor({
   const dirtyRef = React.useRef(false);
   const [saving, setSaving] = React.useState(false);
   // Ad-hoc custom columns: definitions for entity_type='bom_item' (see
-  // CustomAttrCell comment above for why values ride on Part.customFields).
+  // CustomAttrCell comment above: values are per-line, not on the Part).
   // `apiRequest` is a bare global (window.apiRequest, set by api.js) like
   // `api`/`Icon` elsewhere in this file — guarded with typeof so a test
   // harness that doesn't stub it degrades to "no custom columns" instead of
@@ -456,6 +457,67 @@ export function BomEditor({
       cancelled = true;
     };
   }, []);
+  // Per-line values for those columns, fetched once the definitions are known
+  // and only for lines saved to the server (a line without bomItemId has no
+  // per-line store yet). Keyed on the set of line ids, so adding a line loads
+  // just that line rather than refetching the grid.
+  // ponytail: one request per line; add a bulk /bom/{id}/custom-attributes
+  // read if BOMs that use custom columns get large.
+  const lineIdsKey = rows
+    .filter((r) => r.bomItemId != null)
+    .map((r) => r.bomItemId)
+    .join(",");
+  React.useEffect(() => {
+    if (!bomItemAttrDefs.length || !lineIdsKey) return;
+    if (!api?.bomEnterprise?.items?.customAttributes) return;
+    let cancelled = false;
+    const typeById = Object.fromEntries(
+      bomItemAttrDefs.map((d) => [d.id, d.data_type || d.attribute_type]),
+    );
+    // The wire format is a string; give the cell back the type it renders.
+    const parse = (defId, v) => {
+      if (v == null) return null;
+      if (typeById[defId] === "number") {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      if (typeById[defId] === "boolean") return v === "true";
+      return v;
+    };
+    const pending = rows.filter((r) => r.bomItemId != null && r.customValues === undefined);
+    Promise.all(
+      pending.map((r) =>
+        api.bomEnterprise.items
+          .customAttributes(bomId, r.bomItemId)
+          .then((list) => [
+            r.id,
+            // Unset values are omitted so the cell can still show a legacy
+            // Part-level value (the server returns null for both "never set"
+            // and "cleared", so a cleared line re-shows a legacy value).
+            Object.fromEntries(
+              (Array.isArray(list) ? list : [])
+                .filter((x) => x.value != null)
+                .map((x) => [x.attribute_definition_id, parse(x.attribute_definition_id, x.value)]),
+            ),
+          ])
+          .catch(() => null),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      setRows((cur) =>
+        results
+          .filter(Boolean)
+          .reduce((acc, [rowId, values]) => updateRow(acc, rowId, { customValues: values }), cur),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+    // `rows` is read for the pending set but deliberately not a dependency:
+    // lineIdsKey captures the only change that should trigger a fetch, and
+    // depending on `rows` would refetch on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bomItemAttrDefs, lineIdsKey, bomId]);
   React.useEffect(() => {
     const onBefore = (e) => {
       if (dirtyRef.current) {
@@ -774,15 +836,20 @@ export function BomEditor({
     },
     [setRows, markDirty],
   );
-  // See CustomAttrCell comment: values for entity_type='bom_item' custom
-  // columns are stored in row.customFields (Part.customFields JSON) since
-  // there is no bom-item-scoped value table. Only Part-backed rows can sync
-  // to the server; a purely local row keeps the edit in local state + the
-  // autosave draft, same as any other field on an unconfirmed new row.
+  // entity_type='bom_item' custom columns are INSTANCE data: they belong to
+  // this line in this BOM, not to the part. This used to write them to
+  // Part.customFields via api.parts.update, so setting a value on one line
+  // silently changed it on every BOM that used the part. They now go to the
+  // per-line store (BomItemCustomValue) — the server scopes the write by
+  // bom_id AND tenant, so it can never land on another BOM's line.
+  //
+  // A line not yet saved to the server (no bomItemId) has nowhere to store a
+  // per-line value, so the edit stays local until the line is saved, the same
+  // limitation every other field has on an unconfirmed new row. It is never
+  // pushed to the Part as a fallback: that fallback was the bug.
   const commitCustomAttr = React.useCallback(
     (row, def, rawValue) => {
-      const key = def.name || def.attribute_name;
-      if (!key) return;
+      if (def.id == null) return;
       const dataType = def.data_type || def.attribute_type;
       let value = rawValue;
       if (dataType === "number") {
@@ -790,24 +857,22 @@ export function BomEditor({
       } else if (dataType === "boolean") {
         value = !!rawValue;
       }
-      const nextFields = { ...(row.customFields || {}), [key]: value };
-      setRows((cur) => updateRow(cur, row.id, { customFields: nextFields }));
+      const nextValues = { ...(row.customValues || {}), [def.id]: value };
+      setRows((cur) => updateRow(cur, row.id, { customValues: nextValues }));
       markDirty();
-      if (typeof row.partId === "number") {
-        api.parts.update(row.partId, { customFields: nextFields }).catch((e) => {
-          console.warn(
-            "[BomEditor] custom attribute sync failed for",
-            row.id,
-            e.message,
-          );
-          toast(
-            __t("bom.saveFailed") || "Edit saved locally — server sync failed",
-            { kind: "warn" },
-          );
+      if (row.bomItemId == null) return;
+      // The wire format is a string (or null to clear).
+      const wire = value == null || value === "" ? null : String(value);
+      api.bomEnterprise.items
+        .setCustomAttribute(bomId, row.bomItemId, def.id, wire)
+        .catch((e) => {
+          console.warn("[BomEditor] custom attribute sync failed for", row.id, e.message);
+          toast(__t("bom.saveFailed") || "Edit saved locally — server sync failed", {
+            kind: "warn",
+          });
         });
-      }
     },
-    [setRows, markDirty],
+    [setRows, markDirty, bomId],
   );
   return (
     // The presence bar has to live INSIDE the provider. It reads its state

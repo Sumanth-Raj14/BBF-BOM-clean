@@ -30,7 +30,8 @@ import { DataTable } from "../ui/DataTable.jsx";
 // Active is flagged, because that mismatch is what burns a buyer.
 //
 // Scope note: pricing agreements (api.contract.pricing / *PricingAgreement)
-// are a separate per-part concern and are not managed here.
+// are a separate per-part concern and are not MANAGED here. Each contract does
+// get a read-only "Pricing" view of the agreements filed under it.
 
 // Values documented on the Contract model (status / contractType columns).
 const STATUSES = ["Draft", "Active", "Suspended", "Expired", "Terminated"];
@@ -98,6 +99,7 @@ export default function ContractsScreen() {
   const [formError, setFormError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
   const [confirmId, setConfirmId] = React.useState(null);
+  const [pricingFor, setPricingFor] = React.useState(null);
   const [deletingId, setDeletingId] = React.useState(null);
 
   const load = React.useCallback(async () => {
@@ -343,6 +345,9 @@ export default function ContractsScreen() {
       align: "right",
       render: (row) => (
         <span className="contracts__actions">
+          <Button variant="ghost" size="sm" onClick={() => setPricingFor(row)}>
+            {__t("contracts.pricing") || "Pricing"}
+          </Button>
           <Button
             variant="secondary"
             size="sm"
@@ -709,6 +714,12 @@ export default function ContractsScreen() {
         </form>
       </Modal>
 
+      <PricingAgreementsModal
+        contract={pricingFor}
+        vendorName={vendorName}
+        onClose={() => setPricingFor(null)}
+      />
+
       <style>{`
         .contracts__toolbar {
           display: flex;
@@ -769,4 +780,106 @@ export default function ContractsScreen() {
 ContractsScreen.propTypes = {
   data: PropTypes.object,
   openModal: PropTypes.func,
+};
+
+// Read-only list of the per-part prices negotiated under one contract.
+//
+// GET /contracts/pricing-agreements/all had no caller, so an agreed price
+// could be recorded but never seen next to the contract it belongs to.
+// Managing agreements stays out of this screen (see the scope note at the
+// top); this only shows what exists.
+function PricingAgreementsModal({ contract, vendorName, onClose }) {
+  const [rows, setRows] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!contract) return;
+    setRows(null);
+    setError(null);
+    api.contract
+      .listPricingAgreements({ contractId: contract.id, limit: 200 })
+      .then((r) => setRows(Array.isArray(r) ? r : []))
+      .catch((e) => {
+        setError(e?.message || String(e));
+        setRows([]);
+      });
+  }, [contract]);
+
+  if (!contract) return null;
+
+  const date = (v) => (v ? new Date(v).toLocaleDateString() : "—");
+  const name =
+    contract.contractNumber || contract.title || contract.name || `#${contract.id}`;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${__t("contracts.pricing") || "Pricing"} · ${name}`}
+      closeLabel={__t("common.close") || "Close"}
+    >
+      {error && (
+        <p className="fs-12" role="alert" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
+      )}
+      {rows === null ? (
+        <p className="fs-12 fg-3">{__t("common.loading") || "Loading…"}</p>
+      ) : rows.length === 0 && !error ? (
+        <EmptyState
+          title={__t("contracts.noPricing") || "No pricing agreements under this contract"}
+        />
+      ) : (
+        <DataTable
+          dense
+          ariaLabel={__t("contracts.pricing") || "Pricing agreements"}
+          rows={rows}
+          columns={[
+            {
+              key: "partId",
+              header: __t("part.part") || "Part",
+              render: (r) => <span className="font-mono fs-11">#{r.partId}</span>,
+            },
+            {
+              key: "vendorId",
+              header: __t("vendor.name") || "Vendor",
+              render: (r) => vendorName(r.vendorId),
+            },
+            {
+              key: "agreedPrice",
+              header: __t("contracts.agreedPrice") || "Agreed price",
+              align: "num",
+              render: (r) => (
+                <span className="font-mono">
+                  {Number(r.agreedPrice).toLocaleString(undefined, { maximumFractionDigits: 4 })}{" "}
+                  {r.currency}
+                </span>
+              ),
+            },
+            {
+              key: "window",
+              header: __t("contracts.validity") || "Valid",
+              render: (r) => `${date(r.effectiveDate)} → ${date(r.expirationDate)}`,
+            },
+            {
+              key: "tiers",
+              header: __t("contracts.tiers") || "Tiers",
+              align: "num",
+              render: (r) => (Array.isArray(r.volumeTiers) ? r.volumeTiers.length : 0),
+            },
+            {
+              key: "status",
+              header: __t("common.status") || "Status",
+              render: (r) => <StatusPill status={r.status} />,
+            },
+          ]}
+        />
+      )}
+    </Modal>
+  );
+}
+PricingAgreementsModal.propTypes = {
+  contract: PropTypes.object,
+  vendorName: PropTypes.func,
+  onClose: PropTypes.func,
 };

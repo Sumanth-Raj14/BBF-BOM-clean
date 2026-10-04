@@ -126,12 +126,13 @@ async def create_service_bom(
     return {"bom_number": bom_number, "status": "created"}
 
 
-@router.get("/service-bom/{bom_id}")
-async def get_service_bom(
-    bom_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+async def _owned_header(db: AsyncSession, bom_id: int):
+    """The service BOM if it belongs to the caller's tenant; 404 otherwise.
+
+    Every item route goes through this. Only GET used to check: POST and
+    DELETE took bom_id on trust, so any signed-in user could add items to, or
+    delete items from, another tenant's service BOM by guessing ids.
+    """
     tc, tp = tenant_sql_clause()
     hdr = await db.execute(
         text(f"SELECT * FROM service_bom_headers WHERE id = :id {tc}"), {"id": bom_id, **tp}
@@ -139,6 +140,16 @@ async def get_service_bom(
     header = hdr.mappings().first()
     if not header:
         raise HTTPException(404, "Service BOM not found")
+    return header
+
+
+@router.get("/service-bom/{bom_id}")
+async def get_service_bom(
+    bom_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    header = await _owned_header(db, bom_id)
     items = await db.execute(
         text("SELECT * FROM service_bom_items WHERE service_bom_id = :bid ORDER BY sort_order"),
         {"bid": bom_id},
@@ -153,11 +164,16 @@ async def add_service_bom_item(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    header = await _owned_header(db, bom_id)
+    # Raw text() INSERT bypasses the ORM tenant listener, and "tenantId" is NOT
+    # NULL: without it here every add failed. An item belongs to its BOM's
+    # tenant, so take it from the (already tenant-checked) header.
     await db.execute(
         text(
-            "INSERT INTO service_bom_items (service_bom_id, part_id, part_pn, part_name, quantity, unit, service_type, interval_hours, interval_months, is_wear_part, is_consumable) VALUES (:bid, :pid, :ppn, :pn, :qty, :u, :st, :ih, :im, :wp, :ic)"
+            'INSERT INTO service_bom_items (service_bom_id, part_id, part_pn, part_name, quantity, unit, service_type, interval_hours, interval_months, is_wear_part, is_consumable, "tenantId") VALUES (:bid, :pid, :ppn, :pn, :qty, :u, :st, :ih, :im, :wp, :ic, :tid)'
         ),
         {
+            "tid": header["tenantId"],
             "bid": bom_id,
             "pid": body.part_id,
             "ppn": body.part_pn,
@@ -182,10 +198,13 @@ async def delete_service_bom_item(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await db.execute(
+    await _owned_header(db, bom_id)
+    result = await db.execute(
         text("DELETE FROM service_bom_items WHERE id = :iid AND service_bom_id = :bid"),
         {"iid": item_id, "bid": bom_id},
     )
+    if result.rowcount == 0:
+        raise HTTPException(404, "Service BOM item not found")
     await db.commit()
     return {"status": "deleted"}
 

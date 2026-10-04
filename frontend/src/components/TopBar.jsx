@@ -38,6 +38,7 @@ export default function TopBar() {
     setBellOpen,
     notifications,
     markNotificationsRead,
+    clearNotifications,
     setShowAI,
     setSearch,
     t,
@@ -366,6 +367,30 @@ export default function TopBar() {
               }}
             >
               {__t("app.notifMarkAllRead")}
+            </button>
+          )}
+          {notifications.length > 0 && clearNotifications && (
+            <button
+              className="act"
+              onClick={async () => {
+                if (!window.confirm(__t("app.notifConfirmClear") || "Delete all notifications?")) {
+                  return;
+                }
+                try {
+                  const n = await clearNotifications(notifications.map((x) => x.id));
+                  toast(`${n} ${__t("app.notifCleared") || "notification(s) deleted"}`, {
+                    kind: "success",
+                  });
+                } catch (e) {
+                  toast(
+                    __t("common.failedWithMessage", { message: (e && e.message) || String(e) }) ||
+                      `Failed: ${(e && e.message) || e}`,
+                    { kind: "error" },
+                  );
+                }
+              }}
+            >
+              {__t("app.notifClearAll") || "Clear all"}
             </button>
           )}
         </div>

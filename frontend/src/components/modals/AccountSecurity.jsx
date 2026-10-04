@@ -3,6 +3,7 @@ import PropTypes from "prop-types";
 import { __t } from "../../i18n";
 import { toast } from "../../utils/toast";
 import { api } from "../../../api.js";
+import { storage } from "../../utils/storage";
 import { Badge, Button, Field, Input, Spinner } from "../ui";
 
 // Account security: change password, and enrol in / disable TOTP MFA.
@@ -55,6 +56,33 @@ export default function AccountSecurity({ mfaEnabled, onChanged }) {
 
   const fail = (e, fallback) =>
     toast(`${fallback}: ${e?.message || String(e)}`, { kind: "error" });
+
+  // "Sign out of all devices". Uses /auth/revoke-all, the real kill switch:
+  // it records a revoked-before time that every token check honours. (The
+  // similar /sessions/sessions/revoke-all only flips session rows inactive,
+  // which token checks do not consult, so stolen tokens would keep working.)
+  const [revokeBusy, setRevokeBusy] = React.useState(false);
+  async function signOutEverywhere() {
+    if (
+      !window.confirm(
+        __t("security.revokeAllConfirm") ||
+          "Sign out of every device, including this one? You will need to sign in again.",
+      )
+    ) {
+      return;
+    }
+    setRevokeBusy(true);
+    try {
+      await api.auth.revokeAll();
+      // The server already cleared this browser's cookies; drop the cached
+      // user too, and reload so no in-memory state outlives the session.
+      storage.auth.remove();
+      window.location.assign("/");
+    } catch (err) {
+      fail(err, __t("security.revokeAllFailed") || "Could not sign out everywhere");
+      setRevokeBusy(false);
+    }
+  }
 
   async function submitPassword(e) {
     e.preventDefault();
@@ -316,6 +344,17 @@ export default function AccountSecurity({ mfaEnabled, onChanged }) {
             </div>
           </form>
         )}
+      </div>
+
+      <div style={{ marginTop: 18 }}>
+        <h4 className="m-0 fs-12 fw-600">{__t("security.sessions") || "Sessions"}</h4>
+        <p className="fs-11 fg-3" style={{ margin: "6px 0 8px" }}>
+          {__t("security.revokeAllHint") ||
+            "Ends every session on every device at once, this one included. Use it if a device was lost or you think someone else signed in."}
+        </p>
+        <Button variant="secondary" onClick={signOutEverywhere} disabled={revokeBusy}>
+          {revokeBusy ? <Spinner /> : __t("security.revokeAll") || "Sign out of all devices"}
+        </Button>
       </div>
     </div>
   );
