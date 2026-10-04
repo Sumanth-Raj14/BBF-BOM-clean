@@ -1680,14 +1680,32 @@ export const catalogsAPI = {
   // "Create from folder/upload" — multipart upload of a folder selection (or
   // a multi-file pick) that creates a new catalog and populates it with parts
   // extracted from the uploaded files in one round trip.
+  // Repointed at /catalogs/from-folder. This used to POST /catalogs/import,
+  // which DOES NOT EXIST in the API (the live route table has only
+  // /catalogs/, /catalogs/from-folder, /catalogs/{id}, /{id}/deactivate and
+  // /{id}/parts). The screen had a complete form, a spinner and a success
+  // toast, all pointed at a 404.
+  //
+  // The real endpoint's fields are snake_case, not camelCase, and it takes a
+  // SINGLE zip as `file` — not a `files` array. Both differences would have
+  // 422'd even once the path was right.
   importUpload: async (files, metadata = {}) => {
+    const list = files || [];
+    if (list.length !== 1) {
+      // Surfaced rather than silently sending list[0]: the endpoint takes one
+      // zip, so quietly dropping the rest would import part of what the user
+      // chose and report success for all of it.
+      throw new Error(
+        'Catalog import takes a single .zip archive — select exactly one file.',
+      );
+    }
     const formData = new FormData();
-    (files || []).forEach((file) => formData.append('files', file));
-    if (metadata.catalogCode) formData.append('catalogCode', metadata.catalogCode);
-    if (metadata.catalogName) formData.append('catalogName', metadata.catalogName);
+    formData.append('file', list[0]);
+    if (metadata.catalogCode) formData.append('catalog_code', metadata.catalogCode);
+    if (metadata.catalogName) formData.append('catalog_name', metadata.catalogName);
     if (metadata.description) formData.append('description', metadata.description);
 
-    const response = await fetch(API_BASE + '/catalogs/import', {
+    const response = await fetch(API_BASE + '/catalogs/from-folder', {
       method: 'POST',
       credentials: 'include',
       headers: csrfHeaders(),
@@ -2056,6 +2074,29 @@ export const enterpriseExtraAPI = {
     apiRequest(`/enterprise/custom-attributes/${attrId}`, { method: 'DELETE' }),
 };
 api.enterpriseExtra = enterpriseExtraAPI;
+
+// The last three backend routes that had no client at all.
+export const unreachedAPI = {
+  // GET, path param only. Returns {bom_id, total_mass, mass_by_level, unit:"g"}.
+  // Server-cached 300s but correctly invalidated on BOM mutation
+  // (bom_service invalidates bom:mass_rollup:{id} alongside cost/explosion),
+  // so a refetch after an edit is accurate.
+  massRollup: (bomId) => apiRequest(`/bom/${bomId}/mass-rollup`),
+
+  // QUERY PARAMS on a POST: create_ecn declares bare `eco_id: int` and
+  // `description: str`, which FastAPI binds from the query string. A JSON
+  // body 422s. Requires the engineering role.
+  createEcn: (ecoId, description) =>
+    apiRequest(
+      `/eco/ecn?${new URLSearchParams({
+        eco_id: String(ecoId),
+        description,
+      }).toString()}`,
+      { method: 'POST' },
+    ),
+
+};
+api.unreached = unreachedAPI;
 window.mbomAPI = mbomAPI;
 
 // Appended for modals-extra.jsx (API Keys modal): user-scoped API key
