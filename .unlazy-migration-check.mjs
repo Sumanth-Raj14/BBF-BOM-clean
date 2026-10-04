@@ -10,10 +10,63 @@
 
 import { execFileSync } from "node:child_process";
 
-const OLD = "Sumanth-Raj14/BBF-BOM";
+import {
+  BOT_NAME,
+  IDENTITY,
+  TRAILER,
+  assertMatcherWorks,
+  hasAttribution,
+} from "./.unlazy-attribution.mjs";
+
 const NEW = "Sumanth-Raj14/BBF-BOM-clean";
-const OLD_REMOTE = "origin";
 const NEW_REMOTE = "clean";
+
+// Migration-day anchors, pinned by hash.
+//
+// G3, G5 and G6 used to read the OLD repo live. G10 retires that repo AND
+// renames this one to BBF-BOM -- which would make the `origin` URL resolve to
+// THIS repo. G3 would then have compared the clean repo with itself and G6
+// checked its refs against its own, both printing PASS while measuring
+// nothing: a silent vacuum, which is worse than the loud false alarm G3 and
+// G5 were just fixed for.
+//
+// A tree hash is a cryptographic anchor, so it proves exactly as much after
+// the old repo is deleted as it did while it existed. There is deliberately
+// no OLD_REMOTE constant any more: the dependency is removed by construction,
+// not by discipline.
+const OLD_MASTER_TREE = "0dce386bfc30639e4f552b3f0e76117eb2d21d8e";
+const OLD_MASTER_FILES = 1139;
+const OLD_NON_PULL_REFS = [
+  "refs/heads/fix/npm-audit-high",
+  "refs/heads/master",
+  "refs/heads/wip/gap-closing-2026-08-02",
+  "refs/tags/v1.3.0",
+  "refs/tags/v2.0.0",
+  "refs/tags/v2.1.0",
+];
+
+// Branch protection, by NAME. The old check compared only the COUNT, so it
+// failed if a tenth job was ever required -- i.e. if protection got stronger --
+// and passed if all nine were swapped for junk. Containment, not equality, so
+// adding a check is allowed and removing one is not.
+const REQUIRED_CHECKS = [
+  "Lint Backend",
+  "Test Backend",
+  "Lint & TypeCheck Frontend",
+  "Test Frontend",
+  "Build Frontend",
+  "Security Scan",
+  "Test Suite on Postgres",
+  "Fresh Install on Postgres (init_db bootstrap)",
+  "Migration Upgrade Path (incremental alembic upgrade head)",
+];
+
+// GitHub lists commit AUTHORS here. The old check demanded exactly one, which
+// would have failed the first time the collaborator G9 exists to onboard
+// landed a commit -- two gates in direct contradiction.
+const CONTRIBUTOR_ALLOWLIST = ["Sumanth-Raj14", "saisasivardhan-bb"];
+
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 function git(args, opts = {}) {
   return execFileSync("git", args, {
@@ -56,21 +109,15 @@ function cleanTips() {
   const tips = [];
   for (const [ref, sha] of refs) {
     if (ref === "HEAD") continue;
-    const c = peel(sha);
-    // The object must be present locally to walk it.
-    try {
-      git(["cat-file", "-e", c + "^{commit}"]);
-      tips.push(c);
-    } catch {
-      fail(`clean ref ${ref} -> ${c.slice(0, 9)} is not fetched locally; run: git fetch clean --tags`);
-    }
+    // Fetch anything missing rather than failing. The old branch failed with
+    // "run: git fetch clean --tags", which does NOT fetch refs/pull/* -- so on
+    // a fresh clone the gate stopped with advice that could not fix it.
+    tips.push(peel(ensureLocal(NEW_REMOTE, ref, sha)));
   }
   if (!tips.length) fail("no walkable refs found on the clean remote");
   return tips;
 }
 
-const TRAILER = /^\s*co-?authored-by:\s*.*(claude|anthropic)/im;
-const IDENTITY = /noreply@anthropic\.com/i;
 
 // ---------------------------------------------------------------- attribution
 function attribution() {
@@ -91,7 +138,10 @@ function attribution() {
   }
   if (hits.length) fail(`${hits.length} commit(s) carry attribution: ${hits.slice(0, 8).join(", ")}`);
   if (recs.length < 100) fail(`only ${recs.length} commits walked — the ref set looks wrong, so "clean" would be vacuous`);
-  console.log(`CLEAN_ALL_REFS commits=${recs.length} tips=${tips.length}`);
+  // An absence claim needs its matcher proven, or "no hits" may only mean the
+  // search is broken.
+  const control = assertMatcherWorks();
+  console.log(`CLEAN_ALL_REFS commits=${recs.length} tips=${tips.length} control=${control}`);
 }
 
 // -------------------------------------------------------------------- authors
@@ -131,22 +181,16 @@ function blobs(ref) {
 // arrived, not merely that the current working set still overlaps it --
 // and later commits add descendants without altering that ancestor.
 function content() {
-  const oldRef = remoteRefs(OLD_REMOTE).get("refs/heads/master");
   const newRef = remoteRefs(NEW_REMOTE).get("refs/heads/master");
-  if (!oldRef || !newRef) fail("master missing on one of the remotes");
-  const oldSha = peel(oldRef);
+  if (!newRef) fail("master missing on the clean remote");
   const newSha = peel(newRef);
-
-  const oldTree = git(["rev-parse", oldSha + "^{tree}"]).trim();
-  const oldFiles = blobs(oldSha);
-  if (oldFiles.size === 0) fail("old master tree is empty — any match would be vacuous");
 
   // One log pass, not one rev-parse per commit.
   const pairs = git(["log", "--format=%H %T", newSha])
     .trim()
     .split("\n")
     .map((l) => l.trim().split(" "))
-    .filter((p) => p.length === 2);
+    .filter((pair) => pair.length === 2);
   if (pairs.length < 100) {
     fail(
       `only ${pairs.length} commit(s) walked on the clean master — the history ` +
@@ -154,21 +198,30 @@ function content() {
     );
   }
 
-  const found = pairs.find(([, t]) => t === oldTree);
+  const found = pairs.find(([, t]) => t === OLD_MASTER_TREE);
   if (!found) {
     fail(
-      `no ancestor of the clean master carries the old master tree ` +
-        `(${oldTree.slice(0, 9)}), so the import is NOT provably intact: all ` +
-        `${oldFiles.size} file(s) would have to be reconciled by hand.`,
+      `no ancestor of the clean master carries the imported tree ` +
+        `(${OLD_MASTER_TREE.slice(0, 9)}), so the import is NOT provably intact: ` +
+        `all ${OLD_MASTER_FILES} migrated file(s) would have to be reconciled by hand.`,
     );
   }
   const importedAt = found[0];
 
+  // The pinned count does real work now that it no longer comes from the same
+  // place as the tree: a tree that matched but held the wrong number of files
+  // would mean the anchor itself is wrong.
+  const importedFiles = blobs(importedAt);
+  if (importedFiles.size !== OLD_MASTER_FILES) {
+    fail(
+      `the imported tree holds ${importedFiles.size} file(s), expected ` +
+        `${OLD_MASTER_FILES} — the pinned anchor and this history disagree`,
+    );
+  }
+
   // Negative control: a genuinely absent tree must NOT be found, or "found"
-  // proves nothing. Git's well-known empty tree is never a commit tree here,
-  // because every commit in this history has files.
-  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-  if (oldTree === EMPTY_TREE) fail("the old master tree IS the empty tree");
+  // proves nothing. Git's empty tree is never a commit tree in this history.
+  if (OLD_MASTER_TREE === EMPTY_TREE) fail("the pinned tree IS the empty tree");
   if (pairs.some(([, t]) => t === EMPTY_TREE)) {
     fail(
       "the empty tree now appears as a commit tree, so it is no longer a valid " +
@@ -176,17 +229,17 @@ function content() {
     );
   }
 
-  // Divergence since the import is the work merged here afterwards, which is
-  // the point of the repo being alive. Report it; never fail on it.
+  // Drift since the import is the work merged here afterwards, which is the
+  // point of the repo being alive. Report it; never fail on it.
   const now = blobs(newSha);
-  const gone = [...oldFiles.keys()].filter((k) => !now.has(k)).length;
-  const added = [...now.keys()].filter((k) => !oldFiles.has(k)).length;
-  const changed = [...oldFiles.keys()].filter(
-    (k) => now.has(k) && oldFiles.get(k) !== now.get(k),
+  const gone = [...importedFiles.keys()].filter((k) => !now.has(k)).length;
+  const added = [...now.keys()].filter((k) => !importedFiles.has(k)).length;
+  const changed = [...importedFiles.keys()].filter(
+    (k) => now.has(k) && importedFiles.get(k) !== now.get(k),
   ).length;
 
   console.log(
-    `IMPORT_INTACT files=${oldFiles.size} at=${importedAt.slice(0, 9)} ` +
+    `IMPORT_INTACT files=${importedFiles.size} at=${importedAt.slice(0, 9)} ` +
       `drift_since=+${added}/~${changed}/-${gone}`,
   );
 }
@@ -231,31 +284,10 @@ function pullrefs() {
     if (TRAILER.test(body) || IDENTITY.test(body)) tainted.push(`${ref} -> ${commit.slice(0, 9)}`);
   }
 
-  // Positive control: the OLD repo's PR refs MUST still trip this, or the
-  // absence above proves nothing about the matcher.
-  const oldRefs = [...remoteRefs(OLD_REMOTE).entries()].filter(([r]) =>
-    r.startsWith("refs/pull/"),
-  );
-  let controlHit = null;
-  for (const [ref, sha] of oldRefs) {
-    let body;
-    try {
-      body = git(["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", sha]);
-    } catch {
-      continue; // object not fetched locally; try the next one
-    }
-    if (TRAILER.test(body) || IDENTITY.test(body)) {
-      controlHit = `${ref} -> ${sha.slice(0, 9)}`;
-      break;
-    }
-  }
-  if (!controlHit) {
-    fail(
-      "positive control found no tainted PR ref on the OLD repo. Either its refs " +
-        "are not fetched locally (git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*') " +
-        "or the matcher is broken -- either way a clean verdict here is meaningless.",
-    );
-  }
+  // Positive control, hermetic. It used to require a tainted PR ref on the OLD
+  // repo -- a corpus G10 deletes, after which this absence result would have
+  // quietly stopped meaning anything.
+  const controlHit = assertMatcherWorks();
 
   if (tainted.length) {
     fail(
@@ -294,12 +326,18 @@ function ensureLocal(remote, ref, sha) {
 
 // --------------------------------------------------------------- ref parity
 function refparity() {
-  const o = remoteRefs(OLD_REMOTE);
   const n = remoteRefs(NEW_REMOTE);
-  const wanted = [...o.keys()].filter((r) => !r.startsWith("refs/pull/") && r !== "HEAD");
-  const missing = wanted.filter((r) => !n.has(r));
-  if (missing.length) fail("non-pull refs missing from the clean repo: " + missing.join(", "));
-  console.log(`REF_PARITY_OK checked=${wanted.length}`);
+  if (OLD_NON_PULL_REFS.length !== 6) {
+    fail(
+      `the pinned inventory lists ${OLD_NON_PULL_REFS.length} ref(s); the old repo ` +
+        "had 6 non-pull refs, so a shortened list would pass by not looking",
+    );
+  }
+  const missing = OLD_NON_PULL_REFS.filter((r) => !n.has(r));
+  if (missing.length) {
+    fail("ref(s) migrated from the old repo are missing here: " + missing.join(", "));
+  }
+  console.log(`REF_PARITY_OK checked=${OLD_NON_PULL_REFS.length}`);
 }
 
 // ----------------------------------------------------------------- GitHub API
@@ -322,22 +360,44 @@ function api(path) {
 function protection() {
   const p = api(`${NEW}/branches/master/protection`);
   const rsc = p.required_status_checks || {};
-  const n = (rsc.contexts || []).length;
-  if (n !== 9) fail(`expected 9 required checks, found ${n}: ${JSON.stringify(rsc.contexts)}`);
+  const ctx = rsc.contexts || [];
+  const missing = REQUIRED_CHECKS.filter((c) => !ctx.includes(c));
+  if (missing.length) fail(`required check(s) NOT enforced: ${missing.join(", ")}`);
   if (rsc.strict !== true) fail("strict (up-to-date-before-merge) is not enabled");
   if ((p.allow_force_pushes || {}).enabled !== false) fail("force pushes are allowed");
   if ((p.allow_deletions || {}).enabled !== false) fail("branch deletion is allowed");
-  console.log(`PROTECTION_OK checks=${n} strict=true force_push=false delete=false`);
+  console.log(
+    `PROTECTION_OK named=${REQUIRED_CHECKS.length} enforced=${ctx.length} ` +
+      "strict=true force_push=false delete=false",
+  );
 }
 
 function contributors() {
   const d = api(`${NEW}/contributors?anon=1&per_page=100`);
   if (!Array.isArray(d)) fail("unexpected contributors payload: " + JSON.stringify(d).slice(0, 160));
-  const logins = d.map((x) => x.login || x.name);
-  if (logins.length !== 1 || logins[0] !== "Sumanth-Raj14") {
-    fail(`expected exactly [Sumanth-Raj14], got ${JSON.stringify(logins)}`);
+  if (!d.length) fail("GitHub listed NO contributors — a clean verdict would be vacuous");
+
+  // The actual property, checked first and unconditionally.
+  const attributed = d
+    .map((x) => `${x.login || ""} ${x.name || ""}`.trim())
+    .filter((who) => BOT_NAME.test(who) || hasAttribution(who));
+  if (attributed.length) {
+    fail(`Claude/Anthropic is listed as a contributor: ${attributed.join(", ")}`);
   }
-  console.log(`ONE_CONTRIBUTOR ${logins[0]} commits=${d[0].contributions}`);
+
+  const logins = d.map((x) => x.login || x.name);
+  if (!logins.includes("Sumanth-Raj14")) {
+    fail(`the owner is absent from the contributor list (${logins.join(", ")}) — the listing looks wrong`);
+  }
+  const unexpected = logins.filter((l) => !CONTRIBUTOR_ALLOWLIST.includes(l));
+  if (unexpected.length) {
+    fail(
+      `unexpected contributor(s): ${unexpected.join(", ")}. If this is a new ` +
+        "teammate, add them to CONTRIBUTOR_ALLOWLIST; if it is not, find out why.",
+    );
+  }
+  const total = d.reduce((a, x) => a + (x.contributions || 0), 0);
+  console.log(`NO_BOT_CONTRIBUTOR people=${logins.length} commits=${total} [${logins.join(", ")}]`);
 }
 
 const table = { attribution, authors, content, tags, pullrefs, refparity, protection, contributors };
