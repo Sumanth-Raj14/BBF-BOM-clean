@@ -592,6 +592,44 @@ function ECRScreen() {
       label: __t("advanced.ecr.printEcr") || "Print ECR",
       onSelect: () => printEcr(e),
     },
+    // POST /eco/ecn had no client at all. It issues a NEW EcoHeader with
+    // status "issued" derived from this ECO — it does not modify this one.
+    // eco_id and description are QUERY params (bare scalars), not a body.
+    // Requires the engineering role; a viewer gets 403.
+    ...(e.ecoId != null
+      ? [
+          {
+            icon: <Icon.Send size={11} />,
+            label: __t("advanced.ecr.issueEcn") || "Issue ECN from this ECO",
+            onSelect: async () => {
+              const description =
+                (typeof window !== "undefined" &&
+                  window.prompt(
+                    __t("advanced.ecr.ecnPrompt") ||
+                      "Describe the change notice (required):",
+                    e.title || "",
+                  )) ||
+                "";
+              if (!description.trim()) return;
+              try {
+                const r = await api.unreached.createEcn(e.ecoId, description.trim());
+                toast(
+                  (__t("advanced.ecr.ecnIssued") || "ECN issued") +
+                    (r?.ecn_number ? ` · ${r.ecn_number}` : ""),
+                  { kind: "success" },
+                );
+              } catch (err) {
+                toast(
+                  (__t("advanced.ecr.ecnFailed") || "Could not issue ECN") +
+                    ": " +
+                    (err?.message || String(err)),
+                  { kind: "error" },
+                );
+              }
+            },
+          },
+        ]
+      : []),
   ];
 
   const filterItems = [

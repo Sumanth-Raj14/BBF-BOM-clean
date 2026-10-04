@@ -120,7 +120,12 @@ describe("CatalogsScreen", () => {
     expect(api.catalogs.create).not.toHaveBeenCalled();
   });
 
-  it("uploads files via Create from folder/upload and reports parts created", async () => {
+  // The upload used to POST /catalogs/import, which does not exist in the API
+  // at all — the live route table has only /catalogs/, /catalogs/from-folder,
+  // /catalogs/{id}, /{id}/deactivate and /{id}/parts. The screen had a full
+  // form, a spinner and a success toast pointed at a 404. The real endpoint
+  // takes a SINGLE zip with snake_case form fields.
+  it("uploads a single zip via Create from folder/upload and reports parts created", async () => {
     api.catalogs.list.mockResolvedValue([]);
     api.catalogs.importUpload.mockResolvedValue({
       catalog: { id: 3, catalogCode: "UP-01", catalogName: "Uploaded Catalog", isActive: true },
@@ -139,8 +144,8 @@ describe("CatalogsScreen", () => {
       target: { value: "Uploaded Catalog" },
     });
 
-    const file = new File(["dummy"], "part1.pdf", { type: "application/pdf" });
-    const fileInput = screen.getByText("Choose files").querySelector("input[type=file]");
+    const file = new File(["dummy"], "parts.zip", { type: "application/zip" });
+    const fileInput = screen.getByText("Choose .zip").querySelector("input[type=file]");
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     fireEvent.click(screen.getByText("Create & import"));

@@ -8,6 +8,7 @@ import { screenData } from "../services/screenDataBridge.js";
 import { __t } from "../i18n";
 import { toast } from "../utils/toast";
 import WorkOrderShopFloorModal from "../components/modals/WorkOrderShopFloorModal.jsx";
+import WorkOrderReportsModal from "../components/modals/WorkOrderReportsModal.jsx";
 import {
   ScreenHeader,
   Button,
@@ -313,6 +314,8 @@ function WorkOrdersScreen() {
   // issue all existed server-side with no UI, so a work order could be
   // created but never actually run from the application.
   const [shopFloorId, setShopFloorId] = React.useState(null);
+  // Daily + efficiency reports: both endpoints had wrappers and no surface.
+  const [reportsOpen, setReportsOpen] = React.useState(false);
   const [orders, setOrders] = React.useState([]);
   React.useEffect(() => {
     // Fix: was substituting 5 hardcoded DEFAULT_ORDERS whenever the real list
@@ -521,6 +524,9 @@ function WorkOrdersScreen() {
         }
         actions={
           <div className="flex gap-8">
+            <Button variant="secondary" onClick={() => setReportsOpen(true)}>
+              {__t("woReports.title") || "Reports"}
+            </Button>
             {/* Fix: this button exported nothing — it only toasted "Work
                 order schedule exported". Now it actually writes the CSV via
                 the existing downloadBlob helper (same thing the NCR export
@@ -710,6 +716,7 @@ function WorkOrdersScreen() {
           />
         }
       />
+      <WorkOrderReportsModal open={reportsOpen} onClose={() => setReportsOpen(false)} />
       <WorkOrderShopFloorModal
         open={shopFloorId != null}
         workOrderId={shopFloorId}

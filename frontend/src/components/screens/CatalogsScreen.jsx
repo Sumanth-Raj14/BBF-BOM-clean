@@ -138,7 +138,7 @@ export default function CatalogsScreen() {
       return;
     }
     if (!uploadFiles.length) {
-      toast("Choose a folder or files to upload", { kind: "error" });
+      toast("Choose a .zip archive to upload", { kind: "error" });
       return;
     }
     setUploading(true);
@@ -493,7 +493,7 @@ export default function CatalogsScreen() {
         open={showUpload}
         onClose={() => (uploading ? null : setShowUpload(false))}
         title="Create catalog from folder/upload"
-        subtitle="Pick a folder (or select multiple files) of part datasheets, drawings, or images — a new catalog is created and populated with parts extracted from the upload."
+        subtitle="Upload a .zip of part datasheets, drawings or images — a new catalog is created and populated with parts extracted from the archive. CAD files (.step/.stp/.igs/.iges/.sldprt) also have their metadata read."
         size="lg"
         footer={
           <div className="flex gap-8" style={{ justifyContent: "flex-end" }}>
@@ -547,25 +547,20 @@ export default function CatalogsScreen() {
             hint={
               uploadFiles.length
                 ? `${uploadFiles.length} file(s) selected`
-                : "Choose an entire folder or pick individual files."
+                : "Select a single .zip archive."
             }
           >
+            {/* ONE .zip. The endpoint (/catalogs/from-folder) declares a
+                single `file: UploadFile` and reads it as a zip archive; it has
+                no multi-file form field. The folder and multi-file pickers
+                here offered something the server cannot accept — and pointed
+                at /catalogs/import, which does not exist at all. */}
             <div className="flex gap-8" style={{ flexWrap: "wrap" }}>
               <label className="ui-btn ui-btn--secondary ui-btn--md" style={{ cursor: "pointer" }}>
-                Choose folder
+                Choose .zip
                 <input
                   type="file"
-                  webkitdirectory=""
-                  multiple
-                  onChange={onPickFiles}
-                  style={{ display: "none" }}
-                />
-              </label>
-              <label className="ui-btn ui-btn--secondary ui-btn--md" style={{ cursor: "pointer" }}>
-                Choose files
-                <input
-                  type="file"
-                  multiple
+                  accept=".zip,application/zip"
                   onChange={onPickFiles}
                   style={{ display: "none" }}
                 />

@@ -89,13 +89,22 @@ async def create_routing(
     num = f"RT-{count + 1:04d}"
     await db.execute(
         text(
-            'INSERT INTO routing_tables (routing_number, name, description, part_id, created_by, "tenantId") VALUES (:rn, :n, :d, :p, :u, :tid)'
+            # status is set EXPLICITLY. The model declares
+            # status = Column(String(50), default='draft'), but that is an
+            # ORM-side default and this is a raw text() INSERT, so it never
+            # fires: the column has server_default=None and is nullable, so
+            # every row created here landed with status NULL. The CHECK
+            # constraint did not catch it because NULL is not FALSE in SQL,
+            # and the list endpoint's is_active (status == 'active') then
+            # reported false for a row whose status simply did not exist.
+            'INSERT INTO routing_tables (routing_number, name, description, part_id, status, created_by, "tenantId") VALUES (:rn, :n, :d, :p, :st, :u, :tid)'
         ),
         {
             "rn": num,
             "n": body.name,
             "d": body.description,
             "p": body.part_id,
+            "st": "draft",
             "u": user.id,
             "tid": user.tenantId,
         },
@@ -206,7 +215,8 @@ async def create_process_plan(
             # tenant-insert-valuation: raw INSERT bypasses the ORM before_insert
             # listener that stamps tenantId, so set it explicitly (user.tenantId,
             # not context, so superusers still get a real owning tenant).
-            'INSERT INTO process_plans (plan_number, name, description, part_family, is_template, created_by, "tenantId") VALUES (:pn, :n, :d, :pf, :it, :u, :tid)'
+            # Same ORM-default-vs-raw-INSERT trap as routing_tables above.
+            'INSERT INTO process_plans (plan_number, name, description, part_family, is_template, status, created_by, "tenantId") VALUES (:pn, :n, :d, :pf, :it, :st, :u, :tid)'
         ),
         {
             "pn": num,
@@ -214,6 +224,7 @@ async def create_process_plan(
             "d": body.description,
             "pf": body.part_family,
             "it": body.is_template,
+            "st": "draft",
             "u": user.id,
             "tid": user.tenantId,
         },

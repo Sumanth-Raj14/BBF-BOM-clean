@@ -1,56 +1,78 @@
-# Gates: complete the outstanding work
+# Gates: BBF-BOM-clean migration is actually complete
 
-OWNS: frontend/**, backend/**, GATES.md
+OWNS: GATES.md, .unlazy-checks.mjs, .unlazy-migration-check.mjs
 
-Scope: close the four remaining items I can finish without you — the npm high
-advisories, the work-order shop-floor UI, the process-plans UI, and getting it
-all merged to master through a green PR.
+Scope: prove the claims I made about the migration to
+`Sumanth-Raj14/BBF-BOM-clean` — attribution clean across EVERY reachable ref
+(the pass that first missed the tags), content identical to the old master,
+tags on the clean lineage, no inherited PR refs, and branch protection live.
 
-NOT IN SCOPE, because they are not mine to do (surfaced as handoffs, not
-silently dropped):
-  * the GitHub contributor sidebar — needs GitHub Support to purge refs/pull/*,
-    or a fresh repo. Every surface I can reach reports one contributor.
-  * activating the Claude Code PreToolUse hook — needs /hooks or a restart.
+Baseline that makes the absence checks meaningful: before the retag, all three
+tags resolved to pre-rewrite commits that DID carry Claude trailers, and a
+scan that only walked `master` reported clean. G1 therefore walks tags too.
 
-- [ ] G1: no high or critical npm advisories remain in frontend
-  CHECK: node -e "const{spawnSync}=require('child_process');const r=spawnSync('npm',['audit','--json'],{cwd:'frontend',encoding:'utf8',maxBuffer:1e9,shell:true});const v=JSON.parse(r.stdout).metadata.vulnerabilities;if(v.high||v.critical){console.error('remaining: '+JSON.stringify(v));process.exit(1)}console.log('NPM_AUDIT_CLEAN '+JSON.stringify(v))"
-  EXPECT: NPM_AUDIT_CLEAN
+- [x] G0: the attribution matcher can still detect a real trailer (positive control)
+  CHECK: node .unlazy-checks.mjs control
+  EXPECT: CONTROL_DETECTS_TRAILER
+  EVIDENCE: automatic-evidence=v1; definition-sha256=aaf8ef4d017901b38186ddce91bf69cdfb6e5ba2ec08d221f8570aa0d540a626; exit=0; EXPECT=matched; output-sha256=0d769c1c58e850b9ce9274b377c9d4db234b7fb152dc575883c78335c01acc1c; output-bytes=50; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G1: zero Claude/Anthropic attribution across EVERY ref of the clean repo
+  CHECK: node .unlazy-migration-check.mjs attribution
+  EXPECT: CLEAN_ALL_REFS
+  EVIDENCE: automatic-evidence=v1; definition-sha256=610b5feb60e6c65846e0b18a6c5303d143d1c05e53c99e587465c3622dddef4d; exit=0; EXPECT=matched; output-sha256=17ac041b6e67bc84630004d7c070230c98e927495d883d49e62e8fa4440c0584; output-bytes=34; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G2: Sumanth-Raj-BBF is the only author anywhere in the clean repo
+  CHECK: node .unlazy-migration-check.mjs authors
+  EXPECT: SOLE_AUTHOR_ALL_REFS
+  EVIDENCE: automatic-evidence=v1; definition-sha256=78b687f88e84252fbf06d72079d612d90aedaf3944755242f1184c405d28a750; exit=0; EXPECT=matched; output-sha256=edfb8487d002c391833ee49b6f37e990e5a560b912be31ee2a6f09cff60b459b; output-bytes=31; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G3: clean master is byte-identical to old master (no content lost)
+  CHECK: node .unlazy-migration-check.mjs content
+  EXPECT: CONTENT_IDENTICAL
+  EVIDENCE: automatic-evidence=v1; definition-sha256=31b8bb4edff94803df15c2b0a4302aab5f9dc6991472c7e41592092d3a8dd7e9; exit=0; EXPECT=matched; output-sha256=c6867cbefba2a61c725d7947204100c568b0a6d74e8d94c967482598c2133911; output-bytes=29; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G4: every tag resolves onto the clean master lineage, not pre-rewrite history
+  CHECK: node .unlazy-migration-check.mjs tags
+  EXPECT: TAGS_ON_LINEAGE
+  EVIDENCE: automatic-evidence=v1; definition-sha256=6094e70575e71c600077dc44a920f11de2446ef7837e5dcf6d7d4181f53cfa8c; exit=0; EXPECT=matched; output-sha256=2b80c5a05a6ac468e1e77c27b2d5cfd7b2f35209c022fd82a933d6c13412afef; output-bytes=23; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G5: the clean repo inherited no refs/pull/* (the reason it is clean)
+  CHECK: node .unlazy-migration-check.mjs nopulls
+  EXPECT: NO_PULL_REFS
+  EVIDENCE: automatic-evidence=v1; definition-sha256=1b91bdc0a0d84f36a8d0bc1354c807668fd72f4fe59695de4e4d44e94ae7d5dd; exit=0; EXPECT=matched; output-sha256=c87d34d728c0de8cc9676086b14b7dd6f1923588fc33e90fc03fc0ed4d0c5a8d; output-bytes=34; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G6: every non-pull ref on the old repo exists on the clean repo
+  CHECK: node .unlazy-migration-check.mjs refparity
+  EXPECT: REF_PARITY_OK
+  EVIDENCE: automatic-evidence=v1; definition-sha256=786c16feea2f904ce86f3163cf0d0053e99b7173345fb0c7e3d3501c0b2f10f6; exit=0; EXPECT=matched; output-sha256=e8a61b85def14f7fe8de3aaf8891a6c8410072b6ed3f214557f7508dca346b11; output-bytes=24; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G7: branch protection on the clean master is live with 9 required checks
+  CHECK: node .unlazy-migration-check.mjs protection
+  EXPECT: PROTECTION_OK
+  EVIDENCE: automatic-evidence=v1; definition-sha256=63dc3c043514990873f2d0e155710f8dd28dda583b2eb0e0a52da496264f99ab; exit=0; EXPECT=matched; output-sha256=b1c90c5d329a3607307281afe5ffe69f1602d0b91f0ce5e378fbc29248c642e6; output-bytes=65; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [x] G8: GitHub reports exactly one contributor on the clean repo
+  CHECK: node .unlazy-migration-check.mjs contributors
+  EXPECT: ONE_CONTRIBUTOR
+  EVIDENCE: automatic-evidence=v1; definition-sha256=1604ea25b853a4385c3d39a4a276fe2bc63b2bc92b03fc407dc21cdb3e740f50; exit=0; EXPECT=matched; output-sha256=800514e275a39ed196df0c3598e75f3dac35e4bdac613742ed7389c877ff77bd; output-bytes=42; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+
+- [ ] G9: saisasivardhan-bb has write access (invitation accepted)
   EVIDENCE: pending
 
-- [ ] G2: work-order shop-floor routes have a UI caller
-  CHECK: node -e "const fs=require('fs');const api=fs.readFileSync('frontend/api.js','utf8');const need=['/action','/materials/','/operations/'];const miss=need.filter(n=>!api.includes('work-orders')||!api.includes(n));if(miss.length){console.error('api.js missing: '+miss);process.exit(1)}const g=require('child_process').spawnSync('node',['-e','const fs=require(\"fs\");const p=require(\"path\");let hit=0;(function w(d){for(const f of fs.readdirSync(d)){const fp=p.join(d,f);const s=fs.statSync(fp);if(s.isDirectory()){if(!/node_modules|__tests__/.test(fp))w(fp)}else if(/\\\\.jsx?$/.test(f)&&fs.readFileSync(fp,\"utf8\").includes(\"workOrderOps\"))hit++}})(\"frontend/src\");if(!hit){console.error(\"no UI file calls workOrderOps\");process.exit(1)}console.log(\"ok\")'],{encoding:'utf8'});if(g.status!==0){console.error(g.stderr||g.stdout);process.exit(1)}console.log('WORKORDER_UI_WIRED')"
-  EXPECT: WORKORDER_UI_WIRED
-  EVIDENCE: pending
-
-- [ ] G3: frontend tests pass and the production build succeeds
-  CHECK: node -e "const{spawnSync}=require('child_process');for(const a of [['npx',['vitest','run']],['npm',['run','build']]]){const r=spawnSync(a[0],a[1],{cwd:'frontend',encoding:'utf8',maxBuffer:1e9,shell:true});if(r.status!==0){console.error((r.stdout||'').slice(-3000));process.exit(1)}}console.log('FRONTEND_OK')"
-  EXPECT: FRONTEND_OK
-  EVIDENCE: pending
-
-- [ ] G4: every api.js path still resolves against the committed openapi spec
-  CHECK: node -e "const{spawnSync}=require('child_process');const r=spawnSync('npx',['vitest','run','src/__tests__/api-contract.test.js'],{cwd:'frontend',encoding:'utf8',maxBuffer:1e9,shell:true});if(r.status!==0){console.error((r.stdout||'').slice(-2500));process.exit(1)}console.log('CONTRACT_OK')"
-  EXPECT: CONTRACT_OK
-  EVIDENCE: pending
-
-- [ ] G5: backend suite still passes (only the 2 SQLite-only search tests may fail)
-  CHECK: node -e "const{spawnSync}=require('child_process');const r=spawnSync('python',['-m','pytest','app/tests','-q','--no-header','-p','no:cacheprovider'],{cwd:'backend',encoding:'utf8',maxBuffer:1e9});const o=(r.stdout||'')+(r.stderr||'');const m=o.match(/(\\d+) failed/);const f=m?+m[1]:0;const p=(o.match(/(\\d+) passed/)||[])[1];if(!p){console.error('no pytest summary\\n'+o.slice(-2000));process.exit(1)}if(f>2){console.error('regression: '+f+' failures\\n'+o.slice(-3000));process.exit(1)}console.log('BACKEND_OK passed='+p+' failed='+f)"
-  EXPECT: BACKEND_OK
-  EVIDENCE: pending
-
-- [ ] G6: commit attribution stays clean on the branch
-  CHECK: node .unlazy-checks.mjs no-trailers local
-  EXPECT: ATTRIBUTION_CLEAN
-  EVIDENCE: pending
-
-- [ ] G7: merged to master through a PR with all 9 required checks green
+- [ ] G10: old repo retired and BBF-BOM-clean renamed to BBF-BOM
   EVIDENCE: pending
 
 <!--
-G7 is manual: merging needs CI to run on GitHub's side and a merge decision,
-neither of which a local command decides. Evidence is the merge commit sha
-plus the live 9/9 required-check read-back.
+G9 and G10 are manual because neither is mine to complete: an invitation is
+accepted by the invitee, and deleting a repository is an owner action the API
+will not let me perform on the user's behalf. They are surfaced as handoffs
+rather than dropped, so the ledger cannot read as finished while they are open.
 
-G5 tolerates 2 failures because test_search.py's full-text tests use ILIKE and
-tsvector, which SQLite does not implement. It fails on 3+, so a real
-regression still trips it.
+G1 deliberately walks tags and branches, not just master. The earlier pass
+walked master alone, reported clean, and missed that all three tags pointed at
+pre-rewrite commits carrying trailers — the exact defect that would have made
+the migration pointless.
+
+G3 compares blob hashes rather than file counts: equal counts with different
+contents would pass a count check and lose data silently.
 -->

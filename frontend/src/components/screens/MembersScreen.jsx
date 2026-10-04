@@ -6,6 +6,7 @@ import { api } from "../../../api.js";
 import { Icon } from "../../globals";
 import { Button, EmptyState, ScreenHeader, StatusPill } from "../ui";
 import { DataTable } from "../ui/DataTable.jsx";
+import RolePermissionsModal from "../modals/RolePermissionsModal.jsx";
 
 // ============ MEMBERS & PRIVILEGES ============
 //
@@ -20,6 +21,7 @@ import { DataTable } from "../ui/DataTable.jsx";
 // Editing the permission set OF a role is a separate admin concern and is not
 // done here.
 export default function MembersScreen() {
+  const [rolePermsOpen, setRolePermsOpen] = React.useState(false);
   const [members, setMembers] = React.useState([]);
   const [roles, setRoles] = React.useState([]);
   const [rolesByUser, setRolesByUser] = React.useState({});
@@ -212,6 +214,18 @@ export default function MembersScreen() {
           __t("members.subtitle") ||
           "Manage who has access to this workspace and what they can do"
         }
+        actions={
+          <Button variant="secondary" onClick={() => setRolePermsOpen(true)}>
+            {__t("rbac.title") || "Role permissions"}
+          </Button>
+        }
+      />
+      {/* The permission set OF a role, which this screen deliberately did not
+          cover (it assigns roles to users). Admin-only, and granting cannot be
+          undone through the API. */}
+      <RolePermissionsModal
+        open={rolePermsOpen}
+        onClose={() => setRolePermsOpen(false)}
       />
 
       <div className="members__toolbar">

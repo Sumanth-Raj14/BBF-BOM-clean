@@ -14,6 +14,11 @@ function CostRollupView({ data }) {
   const ctx = useAppStore();
   const rows = ctx?.rows || data.rows;
   const [apiRollup, setApiRollup] = React.useState(null);
+  // GET /bom/{id}/mass-rollup had no client at all. Same BOM, same kind of
+  // question as the cost rollup, so it loads alongside rather than needing
+  // its own screen. Server-cached 300s but correctly invalidated on BOM
+  // mutation, so this stays accurate after an edit.
+  const [mass, setMass] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   // "" = no reporting currency requested -> the legacy as-costed roll-up.
@@ -50,6 +55,15 @@ function CostRollupView({ data }) {
           setError(e?.message || String(e));
         })
         .finally(() => setLoading(false));
+
+      // Independent of the cost call: a failure here must not blank the cost
+      // rollup, so it has its own catch and simply leaves mass unreported.
+      if (api.unreached && api.unreached.massRollup) {
+        api.unreached
+          .massRollup(top.project_id || top.bomId || 1)
+          .then((m) => setMass(m))
+          .catch(() => setMass(null));
+      }
     }
   }, [top?.id, currency]);
 
@@ -241,6 +255,17 @@ function CostRollupView({ data }) {
           )}
         </h2>
         <div className="flex items-center gap-8">
+          {/* Mass rollup. Shown only when the server actually returned one —
+              absent data must read as absent, not as 0 g. The unit comes from
+              the response rather than being assumed. */}
+          {mass && typeof mass.total_mass === "number" && (
+            <span className="fs-11 fg-3" title={__t("bomShell.massTitle") || "Rolled-up mass of this assembly"}>
+              {__t("bomShell.totalMass") || "Mass"}:{" "}
+              <span className="font-mono fg-1">
+                {mass.total_mass.toLocaleString()} {mass.unit || "g"}
+              </span>
+            </span>
+          )}
           <label className="hint" htmlFor="rollup-ccy">
             {__t("bomShell.reportingCurrency") || "Reporting currency"}
           </label>

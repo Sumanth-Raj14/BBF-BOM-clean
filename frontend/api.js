@@ -303,6 +303,20 @@ export const authAPI = {
       body: JSON.stringify({ password, totp_code: totpCode }),
     }),
 
+  // Completes a LOGIN that returned {mfa_required:true, temp_token}. Without
+  // this the MFA enrolment UI is a lockout: /auth/login returns no
+  // access_token for an MFA-enabled user, the sign-in path treats that as a
+  // failure, and the user is told their correct credentials were rejected.
+  //
+  // The handler reads the RAW request json (not a pydantic model), so the
+  // field names temp_token / code are load-bearing and unvalidated.
+  mfaChallenge: (tempToken, code) =>
+    apiRequest('/auth/mfa/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ temp_token: tempToken, code }),
+      credentials: 'include',
+    }),
+
   // POST /auth/change-password { current_password, new_password }
   changePassword: (currentPassword, newPassword) =>
     apiRequest('/auth/change-password', {
@@ -546,6 +560,20 @@ export const rbacAPI = {
   permissions: () => apiRequest('/rbac/permissions'),
 
   rolePermissions: (roleId) => apiRequest(`/rbac/roles/${roleId}/permissions`),
+
+  // Grants a permission to a role. NOTE the field names are camelCase here
+  // (roleId / permissionId) — RolePermissionAssign is one of the few models
+  // in this backend that is not snake_case, so the obvious guess 422s.
+  //
+  // ONE-WAY: there is no unassign-permission route. Users have both
+  // assign-user and unassign-user; permissions have only assign. Anything
+  // calling this must say so, or an admin grants a permission expecting to be
+  // able to revoke it and cannot. Admin-only (require_admin).
+  assignPermission: (roleId, permissionId) =>
+    apiRequest('/rbac/roles/assign-permission', {
+      method: 'POST',
+      body: JSON.stringify({ roleId, permissionId }),
+    }),
 
   roleUsers: (roleId) => apiRequest(`/rbac/roles/${roleId}/users`),
 
@@ -1666,14 +1694,32 @@ export const catalogsAPI = {
   // "Create from folder/upload" — multipart upload of a folder selection (or
   // a multi-file pick) that creates a new catalog and populates it with parts
   // extracted from the uploaded files in one round trip.
+  // Repointed at /catalogs/from-folder. This used to POST /catalogs/import,
+  // which DOES NOT EXIST in the API (the live route table has only
+  // /catalogs/, /catalogs/from-folder, /catalogs/{id}, /{id}/deactivate and
+  // /{id}/parts). The screen had a complete form, a spinner and a success
+  // toast, all pointed at a 404.
+  //
+  // The real endpoint's fields are snake_case, not camelCase, and it takes a
+  // SINGLE zip as `file` — not a `files` array. Both differences would have
+  // 422'd even once the path was right.
   importUpload: async (files, metadata = {}) => {
+    const list = files || [];
+    if (list.length !== 1) {
+      // Surfaced rather than silently sending list[0]: the endpoint takes one
+      // zip, so quietly dropping the rest would import part of what the user
+      // chose and report success for all of it.
+      throw new Error(
+        'Catalog import takes a single .zip archive — select exactly one file.',
+      );
+    }
     const formData = new FormData();
-    (files || []).forEach((file) => formData.append('files', file));
-    if (metadata.catalogCode) formData.append('catalogCode', metadata.catalogCode);
-    if (metadata.catalogName) formData.append('catalogName', metadata.catalogName);
+    formData.append('file', list[0]);
+    if (metadata.catalogCode) formData.append('catalog_code', metadata.catalogCode);
+    if (metadata.catalogName) formData.append('catalog_name', metadata.catalogName);
     if (metadata.description) formData.append('description', metadata.description);
 
-    const response = await fetch(API_BASE + '/catalogs/import', {
+    const response = await fetch(API_BASE + '/catalogs/from-folder', {
       method: 'POST',
       credentials: 'include',
       headers: csrfHeaders(),
@@ -1937,6 +1983,134 @@ api.mbom = mbomAPI;
 // its declaration -> "Cannot access 'api' before initialization", which
 // broke 13 test files at import time.
 api.workOrderOps = workOrderOpsAPI;
+
+// Manufacturing routings and process plans. The read side already had a
+// screen (enterprise-screens.jsx RoutingScreen) but it was READ-ONLY: two
+// GETs, zero POSTs, zero buttons. Routings and plans could be viewed and
+// never created, so the feature was unusable end to end.
+//
+// All four creates are json-body (pydantic models), unlike the work-order
+// operation routes next door, which bind bare scalars from the query string.
+export const manufacturingAPI = {
+  listRoutings: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/manufacturing/routings${q ? '?' + q : ''}`);
+  },
+  getRouting: (id) => apiRequest(`/manufacturing/routings/${id}`),
+  // Only name is required. status / routing_number are NOT settable: the
+  // service generates the number and now stamps status explicitly, because
+  // its raw text() INSERT bypasses the model's ORM-side default.
+  createRouting: (data) =>
+    apiRequest('/manufacturing/routings', { method: 'POST', body: JSON.stringify(data) }),
+  addRoutingOperation: (routingId, data) =>
+    apiRequest(`/manufacturing/routings/${routingId}/operations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  listProcessPlans: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/manufacturing/process-plans${q ? '?' + q : ''}`);
+  },
+  getProcessPlan: (id) => apiRequest(`/manufacturing/process-plans/${id}`),
+  createProcessPlan: (data) =>
+    apiRequest('/manufacturing/process-plans', { method: 'POST', body: JSON.stringify(data) }),
+  addProcessPlanStep: (planId, data) =>
+    apiRequest(`/manufacturing/process-plans/${planId}/steps`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+};
+api.manufacturing = manufacturingAPI;
+
+// Enterprise utilities that had no wrapper.
+export const enterpriseExtraAPI = {
+  // PREVIEW ONLY. The handler reads the source BOMs, folds duplicates in
+  // memory and RETURNS the result — it contains no INSERT, no db.add and no
+  // commit, so nothing is saved. Any caller that reports "merged" is lying.
+  //
+  // conflict_resolution has exactly two meaningful values. The handler is an
+  // if/elif on "keep_highest_qty" and "sum" with NO else: any other string
+  // silently takes neither branch, so the duplicate keeps the FIRST BOM's
+  // quantity while the response echoes the bad value back as though it were
+  // honoured. Callers must therefore offer only these two.
+  MERGE_STRATEGIES: ['keep_highest_qty', 'sum'],
+  previewBomMerge: (sourceBomIds, targetName, conflictResolution = 'keep_highest_qty') =>
+    apiRequest('/enterprise/bom/merge', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_bom_ids: sourceBomIds,
+        target_name: targetName,
+        conflict_resolution: conflictResolution,
+      }),
+    }),
+
+  // entity_type is a BARE SCALAR on a POST, so FastAPI binds it from the
+  // QUERY STRING. Sending {"entity_type": ...} as a body 422s.
+  generateNumber: (entityType) =>
+    apiRequest(`/enterprise/auto-number-schemes/generate?entity_type=${encodeURIComponent(entityType)}`, {
+      method: 'POST',
+    }),
+  listNumberSchemes: () => apiRequest('/enterprise/auto-number-schemes'),
+  createNumberScheme: (data) =>
+    apiRequest('/enterprise/auto-number-schemes', { method: 'POST', body: JSON.stringify(data) }),
+
+  // All three are query params, not a body.
+  convertCurrency: (amount, from, to) =>
+    apiRequest(
+      `/enterprise/exchange-rates/convert?${new URLSearchParams({
+        amount: String(amount),
+        from_currency: from,
+        to_currency: to,
+      }).toString()}`,
+    ),
+  listExchangeRates: () => apiRequest('/enterprise/exchange-rates'),
+  createExchangeRate: (data) =>
+    apiRequest('/enterprise/exchange-rates', { method: 'POST', body: JSON.stringify(data) }),
+
+  listComplianceCertificates: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/enterprise/compliance-certificates${q ? '?' + q : ''}`);
+  },
+  createComplianceCertificate: (data) =>
+    apiRequest('/enterprise/compliance-certificates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  listCustomAttributes: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/enterprise/custom-attributes${q ? '?' + q : ''}`);
+  },
+  createCustomAttribute: (data) =>
+    apiRequest('/enterprise/custom-attributes', { method: 'POST', body: JSON.stringify(data) }),
+  deleteCustomAttribute: (attrId) =>
+    apiRequest(`/enterprise/custom-attributes/${attrId}`, { method: 'DELETE' }),
+};
+api.enterpriseExtra = enterpriseExtraAPI;
+
+// The last three backend routes that had no client at all.
+export const unreachedAPI = {
+  // GET, path param only. Returns {bom_id, total_mass, mass_by_level, unit:"g"}.
+  // Server-cached 300s but correctly invalidated on BOM mutation
+  // (bom_service invalidates bom:mass_rollup:{id} alongside cost/explosion),
+  // so a refetch after an edit is accurate.
+  massRollup: (bomId) => apiRequest(`/bom/${bomId}/mass-rollup`),
+
+  // QUERY PARAMS on a POST: create_ecn declares bare `eco_id: int` and
+  // `description: str`, which FastAPI binds from the query string. A JSON
+  // body 422s. Requires the engineering role.
+  createEcn: (ecoId, description) =>
+    apiRequest(
+      `/eco/ecn?${new URLSearchParams({
+        eco_id: String(ecoId),
+        description,
+      }).toString()}`,
+      { method: 'POST' },
+    ),
+
+};
+api.unreached = unreachedAPI;
 window.mbomAPI = mbomAPI;
 
 // Appended for modals-extra.jsx (API Keys modal): user-scoped API key

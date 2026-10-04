@@ -7,6 +7,7 @@ import SupplierScorecardsScreen from "../components/screens/SupplierScorecardsSc
 import ESignaturesScreen from "../components/screens/ESignaturesScreen.jsx";
 import AdminOpsScreen from "../components/screens/AdminOpsScreen.jsx";
 import PublicShareScreen from "../components/screens/PublicShareScreen.jsx";
+import MfaChallengeModal from "../components/modals/MfaChallengeModal.jsx";
 import { storage } from "../utils/storage.js";
 import {
   isOfflineCapableError,
@@ -285,6 +286,11 @@ function FourOhFour() {
 function AppShell() {
   const location = useLocation();
   const ctx = React.useContext(AppContext);
+  // Holds the pending second factor between /auth/login returning
+  // {mfa_required, temp_token} and /auth/mfa/challenge completing it.
+  // Declared unconditionally at the top: hooks must run in the same order
+  // on every render, and the sign-in branch below returns early.
+  const [mfaChallenge, setMfaChallenge] = React.useState(null);
   const route =
     location.pathname === "/" ? "dashboard" : location.pathname.slice(1);
   const {
@@ -395,12 +401,21 @@ function AppShell() {
   if (!authed) {
     intendedRoute.current = route;
     return (
+      <>
       <AuthScreen
         onSignIn={async (u) => {
           if (u.email) {
             const pw = u.password; // also needed by the offline check in catch
             try {
               const result = await api.auth.login(u.email, pw);
+              // An MFA-enabled account gets {mfa_required, temp_token} and NO
+              // access_token. Without this branch the check below fails and
+              // the user is told their correct credentials were rejected —
+              // i.e. enabling two-factor locked them out of the app.
+              if (result && result.mfa_required && result.temp_token) {
+                setMfaChallenge({ tempToken: result.temp_token, user: u, password: pw });
+                return;
+              }
               if (result && result.access_token) {
                 // Auth is cookie-based (credentials:'include'); do not persist
                 // the token or password. storage.auth.set strips credentials.
@@ -460,6 +475,25 @@ function AppShell() {
           }
         }}
       />
+      <MfaChallengeModal
+        open={Boolean(mfaChallenge)}
+        tempToken={mfaChallenge?.tempToken}
+        onCancel={() => setMfaChallenge(null)}
+        onSuccess={async () => {
+          // Mirror the non-MFA success path exactly. Anything it does that
+          // this skips becomes a bug that only MFA users ever hit.
+          const { user: u, password: pw } = mfaChallenge;
+          setMfaChallenge(null);
+          storage.auth.set(u);
+          await rememberOfflineCredential(u.email, pw);
+          ctx.setAuthed(u);
+          toast(__t("common.apiConnected") + " - " + u.name, { kind: "success" });
+          if (intendedRoute.current && intendedRoute.current !== "login") {
+            setRoute(intendedRoute.current);
+          }
+        }}
+      />
+      </>
     );
   }
   if (!onboardingDone) {
