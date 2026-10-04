@@ -242,7 +242,7 @@ function EnterpriseDashboardsScreen() {
 function ServiceBOMScreen() {
   const [boms, setBoms] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const [_selected, setSelected] = React.useState(null);
+  const [selected, setSelected] = React.useState(null);
   const [showCreate, setShowCreate] = React.useState(false);
   const [form, setForm] = React.useState({
     name: "",
@@ -361,6 +361,7 @@ function ServiceBOMScreen() {
           </Select>
         </Field>
       </Modal>
+      <ServiceBomDetail bom={selected} onClose={() => setSelected(null)} onChanged={load} />
       {loading ? (
         <SkeletonTable />
       ) : boms.length === 0 ? (
@@ -410,6 +411,226 @@ function ServiceBOMScreen() {
         />
       )}
     </div>
+  );
+}
+
+const BLANK_SERVICE_ITEM = {
+  part_pn: "",
+  part_name: "",
+  quantity: "1",
+  unit: "EA",
+  interval_hours: "",
+  interval_months: "",
+  is_wear_part: false,
+  is_consumable: false,
+};
+
+// One service BOM opened: its lines, plus add and remove.
+//
+// Row click used to set a `_selected` state that nothing rendered, so a
+// service BOM could be created but never opened or filled, and its item count
+// could never move off 0. (Adding a line also failed server-side until the
+// INSERT set the NOT NULL tenantId.)
+function ServiceBomDetail({ bom, onClose, onChanged }) {
+  const [detail, setDetail] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [form, setForm] = React.useState(BLANK_SERVICE_ITEM);
+  const [busy, setBusy] = React.useState(false);
+
+  const fetchDetail = React.useCallback(() => {
+    if (!bom) return;
+    setError(null);
+    apiRequest(`/enterprise/service-bom/${bom.id}`)
+      .then(setDetail)
+      .catch((e) => setError(e?.message || String(e)));
+  }, [bom]);
+
+  React.useEffect(() => {
+    setDetail(null);
+    setForm(BLANK_SERVICE_ITEM);
+    fetchDetail();
+  }, [fetchDetail]);
+
+  if (!bom) return null;
+
+  const toInt = (v) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  const canAdd = Boolean(form.part_pn.trim() || form.part_name.trim());
+
+  async function add() {
+    if (!canAdd) return;
+    setBusy(true);
+    try {
+      await apiRequest(`/enterprise/service-bom/${bom.id}/items`, {
+        method: "POST",
+        body: JSON.stringify({
+          part_pn: form.part_pn.trim() || null,
+          part_name: form.part_name.trim() || null,
+          quantity: Number(form.quantity) || 1,
+          unit: form.unit || "EA",
+          service_type: bom.service_type || null,
+          interval_hours: toInt(form.interval_hours),
+          interval_months: toInt(form.interval_months),
+          is_wear_part: form.is_wear_part,
+          is_consumable: form.is_consumable,
+        }),
+      });
+      setForm(BLANK_SERVICE_ITEM);
+      fetchDetail();
+      onChanged();
+      toast(__t("enterprise.serviceBom.itemAdded") || "Line added", { kind: "success" });
+    } catch (e) {
+      toast(e.message, { kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(item) {
+    if (!window.confirm(__t("enterprise.serviceBom.confirmRemove") || "Remove this line?")) {
+      return;
+    }
+    try {
+      await apiRequest(`/enterprise/service-bom/${bom.id}/items/${item.id}`, { method: "DELETE" });
+      fetchDetail();
+      onChanged();
+    } catch (e) {
+      toast(e.message, { kind: "error" });
+    }
+  }
+
+  const set = (k) => (e) =>
+    setForm({ ...form, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const interval = (i) =>
+    [
+      i.interval_hours ? `${i.interval_hours} h` : null,
+      i.interval_months ? `${i.interval_months} mo` : null,
+    ]
+      .filter(Boolean)
+      .join(" / ") || "—";
+
+  return (
+    <Modal open onClose={onClose} title={bom.name} closeLabel={__t("common.close") || "Close"}>
+      <div className="flex items-center gap-8 fs-11 fg-3" style={{ marginBottom: 10 }}>
+        <span className="font-mono">{bom.bom_number}</span>
+        <Badge tone="info">{bom.service_type}</Badge>
+      </div>
+
+      {error ? (
+        <p className="fs-12" role="alert" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
+      ) : !detail ? (
+        <SkeletonTable />
+      ) : detail.items.length === 0 ? (
+        <EmptyState
+          title={__t("enterprise.serviceBom.noLines") || "No lines yet"}
+          message={
+            __t("enterprise.serviceBom.noLinesHint") ||
+            "Add the parts this service needs, with their replacement interval."
+          }
+        />
+      ) : (
+        <DataTable
+          dense
+          ariaLabel={__t("enterprise.serviceBom.lines") || "Service BOM lines"}
+          rows={detail.items}
+          columns={[
+            {
+              key: "part_pn",
+              header: __t("part.partNumber") || "Part number",
+              render: (i) => <span className="font-mono fs-11">{i.part_pn || "—"}</span>,
+            },
+            { key: "part_name", header: __t("common.name") || "Name" },
+            {
+              key: "quantity",
+              header: __t("part.quantity") || "Qty",
+              align: "num",
+              render: (i) => `${i.quantity} ${i.unit || ""}`.trim(),
+            },
+            {
+              key: "interval",
+              header: __t("enterprise.serviceBom.interval") || "Interval",
+              render: interval,
+            },
+            {
+              key: "flags",
+              header: "",
+              render: (i) => (
+                <span className="flex gap-4">
+                  {i.is_wear_part ? (
+                    <Badge tone="warn">{__t("enterprise.serviceBom.wear") || "wear"}</Badge>
+                  ) : null}
+                  {i.is_consumable ? (
+                    <Badge tone="neutral">
+                      {__t("enterprise.serviceBom.consumable") || "consumable"}
+                    </Badge>
+                  ) : null}
+                </span>
+              ),
+            },
+            {
+              key: "actions",
+              header: "",
+              render: (i) => (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => remove(i)}
+                  aria-label={`${__t("common.remove") || "Remove"} ${i.part_pn || i.part_name || ""}`}
+                >
+                  {__t("common.remove") || "Remove"}
+                </Button>
+              ),
+            },
+          ]}
+        />
+      )}
+
+      <h4 className="m-0 fs-12 fw-600" style={{ margin: "16px 0 8px" }}>
+        {__t("enterprise.serviceBom.addLine") || "Add a line"}
+      </h4>
+      <div className="field-row">
+        <Field label={__t("part.partNumber") || "Part number"}>
+          <Input mono value={form.part_pn} onChange={set("part_pn")} />
+        </Field>
+        <Field label={__t("common.name") || "Name"}>
+          <Input value={form.part_name} onChange={set("part_name")} />
+        </Field>
+        <Field label={__t("part.quantity") || "Qty"}>
+          <Input type="number" min="0" step="any" value={form.quantity} onChange={set("quantity")} />
+        </Field>
+        <Field label={__t("part.uom") || "Unit"}>
+          <Input value={form.unit} onChange={set("unit")} />
+        </Field>
+      </div>
+      <div className="field-row">
+        <Field label={__t("enterprise.serviceBom.intervalHours") || "Every (hours)"}>
+          <Input type="number" min="0" value={form.interval_hours} onChange={set("interval_hours")} />
+        </Field>
+        <Field label={__t("enterprise.serviceBom.intervalMonths") || "Every (months)"}>
+          <Input type="number" min="0" value={form.interval_months} onChange={set("interval_months")} />
+        </Field>
+        <label className="flex items-center gap-4 fs-12">
+          <input type="checkbox" checked={form.is_wear_part} onChange={set("is_wear_part")} />
+          {__t("enterprise.serviceBom.wearPart") || "Wear part"}
+        </label>
+        <label className="flex items-center gap-4 fs-12">
+          <input type="checkbox" checked={form.is_consumable} onChange={set("is_consumable")} />
+          {__t("enterprise.serviceBom.consumablePart") || "Consumable"}
+        </label>
+      </div>
+      <Button variant="primary" onClick={add} disabled={busy || !canAdd}>
+        {__t("enterprise.serviceBom.addLineAction") || "Add line"}
+      </Button>
+      {!canAdd && (
+        <span className="fs-11 fg-3" style={{ marginLeft: 8 }}>
+          {__t("enterprise.serviceBom.needPart") || "Give a part number or a name."}
+        </span>
+      )}
+    </Modal>
   );
 }
 
