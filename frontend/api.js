@@ -561,6 +561,20 @@ export const rbacAPI = {
 
   rolePermissions: (roleId) => apiRequest(`/rbac/roles/${roleId}/permissions`),
 
+  // Grants a permission to a role. NOTE the field names are camelCase here
+  // (roleId / permissionId) — RolePermissionAssign is one of the few models
+  // in this backend that is not snake_case, so the obvious guess 422s.
+  //
+  // ONE-WAY: there is no unassign-permission route. Users have both
+  // assign-user and unassign-user; permissions have only assign. Anything
+  // calling this must say so, or an admin grants a permission expecting to be
+  // able to revoke it and cannot. Admin-only (require_admin).
+  assignPermission: (roleId, permissionId) =>
+    apiRequest('/rbac/roles/assign-permission', {
+      method: 'POST',
+      body: JSON.stringify({ roleId, permissionId }),
+    }),
+
   roleUsers: (roleId) => apiRequest(`/rbac/roles/${roleId}/users`),
 
   // Payload keys are userId/roleId (see UserRoleAssign in roles_permissions.py).
