@@ -116,23 +116,79 @@ function blobs(ref) {
   return m;
 }
 
+// Asserts the PROPERTY, not a proxy for it.
+//
+// The first version required the clean master tree to be byte-identical to
+// the old master tree. That was right on migration day -- it proved the
+// import lost nothing -- but it expired as soon as PR #1 was merged here,
+// because from then on the clean repo is SUPPOSED to move on. It began
+// reporting our own merged work as damage ("extra:14 changed:14"), the same
+// expiring-proxy defect G5 had.
+//
+// What does not expire: the old repo's master tree must still exist,
+// byte-identical, as an ancestor of the clean master. That is strictly
+// stronger than comparing today's files -- it proves the WHOLE old repo
+// arrived, not merely that the current working set still overlaps it --
+// and later commits add descendants without altering that ancestor.
 function content() {
-  const oldSha = remoteRefs(OLD_REMOTE).get("refs/heads/master");
-  const newSha = remoteRefs(NEW_REMOTE).get("refs/heads/master");
-  if (!oldSha || !newSha) fail("master missing on one of the remotes");
-  const a = blobs(oldSha);
-  const b = blobs(newSha);
-  if (a.size === 0) fail("old master tree is empty — comparison would be vacuous");
-  const onlyOld = [...a.keys()].filter((k) => !b.has(k));
-  const onlyNew = [...b.keys()].filter((k) => !a.has(k));
-  const differing = [...a.keys()].filter((k) => b.has(k) && a.get(k) !== b.get(k));
-  if (onlyOld.length || onlyNew.length || differing.length) {
+  const oldRef = remoteRefs(OLD_REMOTE).get("refs/heads/master");
+  const newRef = remoteRefs(NEW_REMOTE).get("refs/heads/master");
+  if (!oldRef || !newRef) fail("master missing on one of the remotes");
+  const oldSha = peel(oldRef);
+  const newSha = peel(newRef);
+
+  const oldTree = git(["rev-parse", oldSha + "^{tree}"]).trim();
+  const oldFiles = blobs(oldSha);
+  if (oldFiles.size === 0) fail("old master tree is empty — any match would be vacuous");
+
+  // One log pass, not one rev-parse per commit.
+  const pairs = git(["log", "--format=%H %T", newSha])
+    .trim()
+    .split("\n")
+    .map((l) => l.trim().split(" "))
+    .filter((p) => p.length === 2);
+  if (pairs.length < 100) {
     fail(
-      `content differs — missing:${onlyOld.length} extra:${onlyNew.length} changed:${differing.length}` +
-        (onlyOld.length ? `\n  first missing: ${onlyOld.slice(0, 5).join(", ")}` : ""),
+      `only ${pairs.length} commit(s) walked on the clean master — the history ` +
+        "looks wrong, so a match would be vacuous",
     );
   }
-  console.log(`CONTENT_IDENTICAL files=${a.size}`);
+
+  const found = pairs.find(([, t]) => t === oldTree);
+  if (!found) {
+    fail(
+      `no ancestor of the clean master carries the old master tree ` +
+        `(${oldTree.slice(0, 9)}), so the import is NOT provably intact: all ` +
+        `${oldFiles.size} file(s) would have to be reconciled by hand.`,
+    );
+  }
+  const importedAt = found[0];
+
+  // Negative control: a genuinely absent tree must NOT be found, or "found"
+  // proves nothing. Git's well-known empty tree is never a commit tree here,
+  // because every commit in this history has files.
+  const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  if (oldTree === EMPTY_TREE) fail("the old master tree IS the empty tree");
+  if (pairs.some(([, t]) => t === EMPTY_TREE)) {
+    fail(
+      "the empty tree now appears as a commit tree, so it is no longer a valid " +
+        "negative control — choose another absent tree before trusting this gate",
+    );
+  }
+
+  // Divergence since the import is the work merged here afterwards, which is
+  // the point of the repo being alive. Report it; never fail on it.
+  const now = blobs(newSha);
+  const gone = [...oldFiles.keys()].filter((k) => !now.has(k)).length;
+  const added = [...now.keys()].filter((k) => !oldFiles.has(k)).length;
+  const changed = [...oldFiles.keys()].filter(
+    (k) => now.has(k) && oldFiles.get(k) !== now.get(k),
+  ).length;
+
+  console.log(
+    `IMPORT_INTACT files=${oldFiles.size} at=${importedAt.slice(0, 9)} ` +
+      `drift_since=+${added}/~${changed}/-${gone}`,
+  );
 }
 
 // ----------------------------------------------------------------------- tags

@@ -4,7 +4,7 @@ OWNS: GATES.md, .unlazy-checks.mjs, .unlazy-migration-check.mjs
 
 Scope: prove the claims I made about the migration to
 `Sumanth-Raj14/BBF-BOM-clean` — attribution clean across EVERY reachable ref
-(the pass that first missed the tags), content identical to the old master,
+(the pass that first missed the tags), the old content imported intact,
 tags on the clean lineage, no inherited PR refs, and branch protection live.
 
 Baseline that makes the absence checks meaningful: before the retag, all three
@@ -26,10 +26,10 @@ scan that only walked `master` reported clean. G1 therefore walks tags too.
   EXPECT: SOLE_AUTHOR_ALL_REFS
   EVIDENCE: automatic-evidence=v1; definition-sha256=78b687f88e84252fbf06d72079d612d90aedaf3944755242f1184c405d28a750; exit=0; EXPECT=matched; output-sha256=edfb8487d002c391833ee49b6f37e990e5a560b912be31ee2a6f09cff60b459b; output-bytes=31; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
 
-- [x] G3: clean master is byte-identical to old master (no content lost)
+- [x] G3: the old master tree survives byte-identical as an ancestor of the clean master
   CHECK: node .unlazy-migration-check.mjs content
-  EXPECT: CONTENT_IDENTICAL
-  EVIDENCE: automatic-evidence=v1; definition-sha256=31b8bb4edff94803df15c2b0a4302aab5f9dc6991472c7e41592092d3a8dd7e9; exit=0; EXPECT=matched; output-sha256=c6867cbefba2a61c725d7947204100c568b0a6d74e8d94c967482598c2133911; output-bytes=29; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+  EXPECT: IMPORT_INTACT
+  EVIDENCE: automatic-evidence=v1; definition-sha256=8daa236faf61635a328a62cfa8bd870c0b5110f8b423aea5c7d707ccfd8d53d9; exit=0; EXPECT=matched; output-sha256=e3c85e6a17ddbb987e3404190b26ebee97ec878f83dfbce347eae23565110279; output-bytes=61; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
 
 - [x] G4: every tag resolves onto the clean master lineage, not pre-rewrite history
   CHECK: node .unlazy-migration-check.mjs tags
@@ -75,6 +75,17 @@ the migration pointless.
 
 G3 compares blob hashes rather than file counts: equal counts with different
 contents would pass a count check and lose data silently.
+
+G3 originally required the clean master tree to EQUAL the old master tree.
+Like G5, that was a fair proxy on migration day and expired the moment work
+was merged here: it reported our own merged PRs as damage (extra:14
+changed:14). It now requires the old master tree to exist byte-identical as
+an ANCESTOR of the clean master, which cannot expire -- later commits add
+descendants without altering that ancestor -- and is strictly stronger, since
+it proves the whole old repo arrived rather than that today's files still
+overlap it. Drift since the import is reported, never failed on, and a
+genuinely absent tree (git's empty tree) is checked to be unfindable so that
+"found" is not vacuous.
 
 G5 originally asserted the clean repo had ZERO refs/pull/*. That was a fair
 proxy on migration day -- the repo had no PRs of its own, so any PR ref could
