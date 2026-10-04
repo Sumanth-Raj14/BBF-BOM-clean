@@ -1,5 +1,6 @@
 import hashlib
 import io
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -38,6 +39,10 @@ def generate_barcode_string(pn: str, part_id: int) -> str:
     # not a security or integrity check, hence usedforsecurity=False.
     hash_val = hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:12].upper()
     return f"4988600{hash_val[:4]}{hash_val[4:8]}{hash_val[8:12]}"
+
+
+# The shape generate_barcode_string() produces; lookup recognises it below.
+_GENERATED_CODE = re.compile(r"4988600[0-9A-F]{12}")
 
 
 def _render_barcode_image(code: str, fmt: str) -> bytes:
@@ -83,10 +88,27 @@ async def lookup_barcode(
     """Resolve a scanned barcode to its part, scoped to the caller's tenant.
     Used by the mobile scanner when a scanned code doesn't match a part's
     name/PN/MPN via the regular parts search (barcodes aren't indexed there)."""
-    result = await db.execute(
-        select(Part).where(Part.barcode == barcode, Part.tenantId == current_user.tenantId)
-    )
-    part = result.scalar_one_or_none()
+    code = barcode.strip()
+    tid = current_user.tenantId
+    result = await db.execute(select(Part).where(Part.barcode == code, Part.tenantId == tid))
+    part = result.scalars().first()
+    if not part:
+        # QR labels from /barcodes/qr arrive here as their PN (the client
+        # reduces the "PN:...|ID:...|Name:..." payload). BarcodeScanModal calls
+        # only this route, with no PN search first, so without this fallback
+        # the app could not read the labels it prints.
+        result = await db.execute(select(Part).where(Part.pn == code, Part.tenantId == tid))
+        part = result.scalars().first()
+    if not part and _GENERATED_CODE.fullmatch(code):
+        # A Code 128 label printed from /barcodes/image encodes
+        # generate_barcode_string(pn, id): deterministic but one-way, so it is
+        # matched by recomputing it per part rather than by a column.
+        # ponytail: O(parts in tenant) per scan of such a label; persist the
+        # generated code in an indexed column if a tenant nears ~100k parts.
+        rows = (await db.execute(select(Part.id, Part.pn).where(Part.tenantId == tid))).all()
+        hit = next((pid for pid, pn in rows if generate_barcode_string(pn, pid) == code), None)
+        if hit is not None:
+            part = await db.get(Part, hit)
     if not part:
         raise HTTPException(status_code=404, detail="No part found for this barcode")
 
@@ -120,7 +142,9 @@ async def generate_part_barcode(
         "name": part.name,
         "barcode": barcode_str,
         "format": fmt,
-        "imageUrl": f"/api/v1/barcodes/image/{part_id}?fmt={fmt}",
+        # The image route's parameter is aliased to `format`; `?fmt=` was
+        # silently ignored, so every QR request rendered a code128 barcode.
+        "imageUrl": f"/api/v1/barcodes/image/{part_id}?format={fmt}",
     }
 
 

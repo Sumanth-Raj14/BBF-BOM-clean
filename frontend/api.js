@@ -779,8 +779,26 @@ export const barcodesAPI = {
     return apiRequest(`/barcodes/generate/${partId}?format=${format}`);
   },
   
-  lookup: async (barcode) => {
-    return apiRequest(`/barcodes/lookup/${barcode}`);
+  // Both scanners (BarcodeScanModal, the mobile scanner) resolve through here.
+  // Labels printed from /barcodes/qr encode "PN:<pn>|ID:<id>|Name:<name>", so
+  // reduce that to the PN or the app could not read its own labels; a plain
+  // barcode passes through unchanged. Encoded, since scanned codes can carry
+  // spaces and other characters that are not path-safe.
+  lookup: async (scanned) => {
+    const raw = String(scanned || '').trim();
+    const code = raw.startsWith('PN:') ? raw.slice(3).split('|')[0] : raw;
+    return apiRequest(`/barcodes/lookup/${encodeURIComponent(code)}`);
+  },
+
+  // A printable label as a Blob: kind 'qr' (PNG) or 'code128' (SVG). Both
+  // encode something lookup() resolves back to the part. Fetched directly:
+  // apiRequest parses JSON, and a bare <img src> may not carry credentials
+  // when the API is on another origin.
+  labelImage: async (partId, kind) => {
+    const path = kind === 'qr' ? `/barcodes/qr/${partId}` : `/barcodes/image/${partId}?format=code128`;
+    const response = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+    if (!response.ok) throw new Error(`Could not load the ${kind} label (HTTP ${response.status})`);
+    return response.blob();
   },
   
   // Removed: assign() and batchGenerate() called /barcodes/assign/{id} and
@@ -1268,6 +1286,15 @@ export const bomEnterpriseAPI = {
     update: (bomId, itemId, data) => apiRequest(`/bom/${bomId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (bomId, itemId) => apiRequest(`/bom/${bomId}/items/${itemId}`, { method: 'DELETE' }),
     reorder: (bomId, itemIds) => apiRequest(`/bom/${bomId}/items/reorder`, { method: 'POST', body: JSON.stringify({ item_ids: itemIds }) }),
+    // Per-LINE custom attribute values (BomItemCustomValue). Instance data:
+    // the same part can carry a different value on each BOM it appears in.
+    // `value` is a string on the wire (or null to clear) — callers serialize.
+    customAttributes: (bomId, itemId) => apiRequest(`/bom/${bomId}/items/${itemId}/custom-attributes`),
+    setCustomAttribute: (bomId, itemId, attributeDefinitionId, value) =>
+      apiRequest(`/bom/${bomId}/items/${itemId}/custom-attributes`, {
+        method: 'PUT',
+        body: JSON.stringify({ attribute_definition_id: attributeDefinitionId, value }),
+      }),
   },
   snapshots: {
     list: (bomId) => apiRequest(`/bom/${bomId}/snapshots`),

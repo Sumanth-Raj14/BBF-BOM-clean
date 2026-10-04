@@ -1902,69 +1902,68 @@ CommentsTab.propTypes = {
   row: PropTypes.object,
 };
 function BarcodeTab({ row }) {
-  const bars = React.useMemo(() => {
-    const s = (row.pn || "X").repeat(6);
-    return [...s].map((c, i) => ((c.charCodeAt(0) + i * 7) % 4) + 1);
-  }, [row.pn]);
-  const qrCells = React.useMemo(() => {
-    const size = 21;
-    const cells = Array.from({ length: size }, () => Array(size).fill(0));
-    const isFinder = (x, y) => {
-      const inSquare = (cx, cy) =>
-        x >= cx && x < cx + 7 && y >= cy && y < cy + 7;
-      return inSquare(0, 0) || inSquare(size - 7, 0) || inSquare(0, size - 7);
+  // Real, scannable codes rendered by the server.
+  //
+  // This tab used to DRAW both codes in the browser: the "QR" was three finder
+  // squares plus pseudo-random noise seeded from the PN, and the "Code 128"
+  // bars came from character codes. Both looked real and both could be
+  // downloaded and printed, but neither encoded anything — a label printed
+  // here and stuck on a physical part could never be scanned. Each image now
+  // encodes something /barcodes/lookup resolves back to this part, so the
+  // app's own scanner can read the labels it prints.
+  const partId = typeof row.partId === "number" ? row.partId : null;
+  const [labels, setLabels] = React.useState({});
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => {
+    setLabels({});
+    setError(null);
+    if (partId == null || !api?.barcodes?.labelImage) return;
+    let cancelled = false;
+    const urls = [];
+    Promise.all(
+      ["code128", "qr"].map((kind) =>
+        api.barcodes.labelImage(partId, kind).then((blob) => {
+          const url = URL.createObjectURL(blob);
+          urls.push(url);
+          return [kind, { blob, url }];
+        }),
+      ),
+    )
+      .then((pairs) => {
+        if (!cancelled) setLabels(Object.fromEntries(pairs));
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e?.message || String(e));
+      });
+    return () => {
+      cancelled = true;
+      urls.forEach((u) => URL.revokeObjectURL(u));
     };
-    const drawFinder = (cx, cy) => {
-      for (let y = 0; y < 7; y++)
-        for (let x = 0; x < 7; x++) {
-          const edge = x === 0 || x === 6 || y === 0 || y === 6;
-          const inner = x >= 2 && x <= 4 && y >= 2 && y <= 4;
-          cells[cy + y][cx + x] = edge || inner ? 1 : 0;
-        }
-    };
-    drawFinder(0, 0);
-    drawFinder(size - 7, 0);
-    drawFinder(0, size - 7);
-    const seed = (row.pn || "X")
-      .split("")
-      .reduce((a, c) => a * 31 + c.charCodeAt(0), 7);
-    let s = seed;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        if (isFinder(x, y)) continue;
-        s = (s * 1103515245 + 12345) & 0x7fffffff;
-        cells[y][x] = s % 3 === 0 ? 1 : 0;
-      }
-    }
-    for (let i = 8; i < size - 8; i++) {
-      cells[6][i] = i % 2 === 0 ? 1 : 0;
-      cells[i][6] = i % 2 === 0 ? 1 : 0;
-    }
-    return cells;
-  }, [row.pn]);
-  const downloadSVG = (svgEl, name) => {
-    const xml = new window.XMLSerializer().serializeToString(svgEl);
-    const blob = new Blob([xml], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
+  }, [partId]);
+
+  const download = (kind, base) => {
+    const label = labels[kind];
+    if (!label) return;
+    const name = `${base}${label.blob.type.includes("svg") ? ".svg" : ".png"}`;
     const a = document.createElement("a");
-    a.href = url;
+    a.href = label.url;
     a.download = name;
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 100);
     toast((__t("detailDrawer.downloaded") || "Downloaded ") + name, {
       kind: "success",
     });
   };
-  const printOne = (svgHTML, title) => {
+  const printOne = (imageHTML, title) => {
     // Build markup via escapeHtml + openPrintWindow, consistent with the other
-    // print paths (utils/download.js). svgHTML is generated (barcode/QR) markup;
-    // interpolated fields (title, row.pn, row.name) are escaped.
+    // print paths (utils/download.js). imageHTML is an <img> of a data: URL
+    // made from our own blob; interpolated fields (title, row.pn, row.name)
+    // are escaped.
     const esc = window.escapeHtml;
     const html =
       "<!doctype html><html><head><title>" +
       esc(title) +
       "</title><style>body{font-family:monospace;text-align:center;padding:30px}</style></head><body>" +
-      svgHTML +
+      imageHTML +
       "<div style='margin-top:14px;font-size:14px'>" +
       esc(row.pn) +
       "</div>" +
@@ -1976,10 +1975,51 @@ function BarcodeTab({ row }) {
       "script></body></html>";
     window.openPrintWindow(title, html, { printDelay: 200 });
   };
-  const barcodeRef = React.useRef(null);
-  const qrRef = React.useRef(null);
-  const cell = 6;
-  const qrSize = qrCells.length * cell;
+  // A data: URL rather than the blob: URL, so the print window does not
+  // depend on this tab's object URL staying alive.
+  const printLabel = (kind, title) => {
+    const label = labels[kind];
+    if (!label) return;
+    const reader = new FileReader();
+    reader.onload = () =>
+      printOne(`<img alt="" style="max-width:320px" src="${reader.result}">`, title);
+    reader.readAsDataURL(label.blob);
+  };
+
+  const status =
+    partId == null
+      ? __t("detailDrawer.labelsNeedSavedPart") ||
+        "Save this part first — its labels are generated from the saved record."
+      : error
+        ? (__t("detailDrawer.labelsFailed") || "Could not load the labels: ") + error
+        : null;
+  const ready = (kind) => Boolean(labels[kind]);
+  const box = (kind, heading, alt) => (
+    <div
+      className="border-line rounded-r3 text-center mb-12"
+      style={{ padding: 16, background: "white", color: "#000" }}
+    >
+      <div className="font-mono fs-9 letter-sp-6 uppercase mb-6" style={{ color: "#666" }}>
+        {heading}
+      </div>
+      {ready(kind) ? (
+        <img
+          src={labels[kind].url}
+          alt={alt}
+          className="d-block mx-auto"
+          style={{ maxWidth: "100%", maxHeight: kind === "qr" ? 180 : 90 }}
+        />
+      ) : (
+        <div className="fs-11" style={{ color: "#666", padding: "18px 0" }}>
+          {status || __t("common.loading") || "Loading…"}
+        </div>
+      )}
+      <div className="font-mono fs-12 mt-4" style={{ letterSpacing: "0.15em", color: "#000" }}>
+        {row.pn}
+      </div>
+    </div>
+  );
+
   return (
     <>
       <div className="hint mb-14">
@@ -1987,97 +2027,18 @@ function BarcodeTab({ row }) {
           "Auto-generated traceability codes for ") + row.pn}
         .
       </div>
-      <div
-        className="border-line rounded-r3 text-center mb-12"
-        style={{ padding: 16, background: "white", color: "#000" }}
-      >
-        <div
-          className="font-mono fs-9 letter-sp-6 uppercase mb-6"
-          style={{ color: "#666" }}
-        >
-          {__t("detailDrawer.code128") || "CODE 128"}
-        </div>
-        <svg
-          ref={barcodeRef}
-          width="320"
-          height="74"
-          viewBox={`0 0 ${bars.reduce((s, b) => s + b, 0) + 4} 60`}
-          className="d-block mx-auto"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <rect x="0" y="0" width="100%" height="100%" fill="white" />
-          {(() => {
-            let x = 2;
-            return bars.map((w, i) => {
-              const fill = i % 2 === 0 ? "#000" : "#fff";
-              const r = (
-                <rect
-                  key={"bar-" + i}
-                  x={x}
-                  y="6"
-                  width={w}
-                  height="42"
-                  fill={fill}
-                />
-              );
-              x += w;
-              return r;
-            });
-          })()}
-        </svg>
-        <div
-          className="font-mono fs-12 mt-4"
-          style={{ letterSpacing: "0.15em", color: "#000" }}
-        >
-          {row.pn}
-        </div>
-      </div>
-      <div
-        className="border-line rounded-r3 text-center mb-12"
-        style={{ padding: 16, background: "white", color: "#000" }}
-      >
-        <div
-          className="font-mono fs-9 letter-sp-6 uppercase mb-6"
-          style={{ color: "#666" }}
-        >
-          {__t("detailDrawer.qrLinks") || "QR · LINKS TO PART RECORD"}
-        </div>
-        <svg
-          ref={qrRef}
-          width={qrSize + 24}
-          height={qrSize + 24}
-          viewBox={`0 0 ${qrSize + 24} ${qrSize + 24}`}
-          className="d-block mx-auto"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <rect x="0" y="0" width="100%" height="100%" fill="white" />
-          {qrCells.map((r, y) =>
-            r.map((v, x) =>
-              v ? (
-                <rect
-                  key={`${x}-${y}`}
-                  x={12 + x * cell}
-                  y={12 + y * cell}
-                  width={cell}
-                  height={cell}
-                  fill="#000"
-                />
-              ) : null,
-            ),
-          )}
-        </svg>
-        <div className="font-mono fs-10 mt-4" style={{ color: "#666" }}>
-          bbox.dev/p/{row.pn}
-        </div>
-      </div>
+      {box("code128", __t("detailDrawer.code128") || "CODE 128", (row.pn || "") + " Code 128")}
+      {box(
+        "qr",
+        __t("detailDrawer.qrResolves") || "QR · SCANS BACK TO THIS PART",
+        (row.pn || "") + " QR code",
+      )}
       <div className="d-grid gap-8" style={{ gridTemplateColumns: "1fr 1fr" }}>
         <Button
           variant="secondary"
           size="sm"
-          onClick={() =>
-            barcodeRef.current &&
-            downloadSVG(barcodeRef.current, row.pn + "_barcode.svg")
-          }
+          disabled={!ready("code128")}
+          onClick={() => download("code128", row.pn + "_barcode")}
         >
           <Icon.Export size={11} />{" "}
           {__t("detailDrawer.downloadBarcode") || "Download barcode"}
@@ -2085,9 +2046,8 @@ function BarcodeTab({ row }) {
         <Button
           variant="secondary"
           size="sm"
-          onClick={() =>
-            qrRef.current && downloadSVG(qrRef.current, row.pn + "_qr.svg")
-          }
+          disabled={!ready("qr")}
+          onClick={() => download("qr", row.pn + "_qr")}
         >
           <Icon.Export size={11} />{" "}
           {__t("detailDrawer.downloadQr") || "Download QR"}
@@ -2095,19 +2055,16 @@ function BarcodeTab({ row }) {
         <Button
           variant="secondary"
           size="sm"
-          onClick={() =>
-            barcodeRef.current &&
-            printOne(barcodeRef.current.outerHTML, row.pn + " barcode")
-          }
+          disabled={!ready("code128")}
+          onClick={() => printLabel("code128", row.pn + " barcode")}
         >
           {__t("detailDrawer.printBarcodeLabel") || "Print barcode label"}
         </Button>
         <Button
           variant="secondary"
           size="sm"
-          onClick={() =>
-            qrRef.current && printOne(qrRef.current.outerHTML, row.pn + " QR")
-          }
+          disabled={!ready("qr")}
+          onClick={() => printLabel("qr", row.pn + " QR")}
         >
           {__t("detailDrawer.printQrLabel") || "Print QR label"}
         </Button>
@@ -2116,8 +2073,8 @@ function BarcodeTab({ row }) {
         className="mt-10 bg-sunk border-line rounded-r2 fs-11 fg-3 font-mono"
         style={{ padding: 10 }}
       >
-        {__t("detailDrawer.wmsCompat") ||
-          "WMS compat: GS1-128 · QR points to internal part record · scan with the Scan button in topbar/Components to look up."}
+        {__t("detailDrawer.labelsScanHint") ||
+          "Both labels resolve to this part with the Scan button in the top bar or the mobile scanner."}
       </div>
     </>
   );

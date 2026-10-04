@@ -565,6 +565,139 @@ SSOCallbackScreen.propTypes = {
   onComplete: PropTypes.func,
 };
 
+// Landing page for the emailed reset link (<origin>/auth/reset-password?token=…).
+//
+// Only the REQUEST half of password reset was wired: "Forgot?" calls
+// /auth/forgot-password and the email goes out, but nothing handled the link,
+// so it fell through to the sign-in screen and the token was never redeemed —
+// a user who forgot their password could not get back in.
+function ResetPasswordScreen() {
+  // Read once, then strip it from the address bar: the token is a bearer
+  // secret, and leaving it in the URL puts it in history and in the Referer
+  // of anything this page loads.
+  const [token] = React.useState(() => {
+    const t = new URLSearchParams(window.location.search).get("token") || "";
+    if (t) window.history.replaceState(null, "", window.location.pathname);
+    return t;
+  });
+  const [password, setPassword] = React.useState("");
+  const [confirm, setConfirm] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [done, setDone] = React.useState(false);
+
+  const mismatch = confirm.length > 0 && password !== confirm;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!password || password !== confirm) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiRequest("/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token, password }),
+      });
+      setDone(true);
+    } catch (err) {
+      // 400 = expired/used token, 422 = password rejected by the policy. The
+      // server's wording says which, so show it rather than a generic line.
+      setError(err?.message || __t("auth.resetFailed") || "Could not reset the password.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const backToSignIn = (
+    <Button variant={done ? "primary" : "ghost"} size="lg" block onClick={() => { window.location.href = "/"; }}>
+      {__t("auth.backToSignIn") || "Back to sign in"}
+    </Button>
+  );
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-main" style={{ margin: "auto" }}>
+        <div className="auth-card">
+          <h2 className="fs-22" style={{ margin: "0 0 4px" }}>
+            {__t("auth.resetPasswordTitle") || "Reset password"}
+          </h2>
+
+          {!token ? (
+            <>
+              <p className="fs-12 fg-3 mb-14" role="alert">
+                {__t("auth.resetLinkIncomplete") ||
+                  "This reset link is incomplete. Open the link from the email again, or request a new one from the sign-in screen."}
+              </p>
+              {backToSignIn}
+            </>
+          ) : done ? (
+            <>
+              <p className="fs-12 mb-14" role="status">
+                {__t("auth.resetDone") ||
+                  "Your password has been changed. Sign in with the new password."}
+              </p>
+              {backToSignIn}
+            </>
+          ) : (
+            <form onSubmit={submit}>
+              <Field label={__t("auth.newPassword") || "New password"}>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </Field>
+              <Field label={__t("auth.confirmPassword") || "Confirm new password"}>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  aria-invalid={mismatch || undefined}
+                  required
+                />
+              </Field>
+              {mismatch && (
+                <p className="fs-11 fg-danger" style={{ margin: "0 0 8px" }}>
+                  {__t("auth.passwordsDontMatch") || "The passwords do not match."}
+                </p>
+              )}
+              {error && (
+                <div
+                  className="rounded-r2 fg-danger fs-12 font-mono mb-14"
+                  role="alert"
+                  style={{
+                    padding: 8,
+                    background: "color-mix(in oklch, var(--danger) 10%, var(--bg))",
+                    border: "1px solid var(--danger)",
+                  }}
+                >
+                  {error}
+                </div>
+              )}
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                block
+                disabled={busy || !password || password !== confirm}
+              >
+                {busy
+                  ? __t("auth.resetting") || "Saving…"
+                  : __t("auth.resetPassword") || "Reset password"}
+              </Button>
+              <div style={{ marginTop: 8 }}>{backToSignIn}</div>
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============ ONBOARDING WIZARD ============
 function OnboardingWizard({ user, onComplete }) {
   const [step, setStep] = React.useState(0);
@@ -1063,10 +1196,11 @@ function MobileScanView({ onClose }) {
 MobileScanView.propTypes = {
   onClose: PropTypes.func,
 };
-export { AuthScreen, SSOCallbackScreen, OnboardingWizard, MobileScanView };
+export { AuthScreen, SSOCallbackScreen, ResetPasswordScreen, OnboardingWizard, MobileScanView };
 Object.assign(window, {
   AuthScreen,
   SSOCallbackScreen,
+  ResetPasswordScreen,
   OnboardingWizard,
   MobileScanView,
 });

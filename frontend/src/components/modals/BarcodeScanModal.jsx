@@ -71,15 +71,19 @@ export default function BarcodeScanModal({ open, onClose, onFound }) {
     setError(null);
     try {
       const result = await api.barcodes.lookup(barcode);
-      if (result.found) {
+      // The lookup returns the part itself (and 404s on a miss, landing in the
+      // catch below). It has no `found` field: checking for one sent every
+      // SUCCESSFUL scan to the "No part found" branch.
+      if (result?.partId != null) {
         setFoundPart(result);
         setPhase("found");
       } else {
+        // Interpolate through i18next: the locale string uses {{barcode}}, and
+        // a single-brace .replace() on it left the user looking at
+        // "No part found for barcode: {CODE}".
         setError(
-          (
-            __t("modals.barcode.noPartFound") ||
-            "No part found for barcode: {barcode}"
-          ).replace("{barcode}", barcode),
+          __t("modals.barcode.noPartFound", { barcode }) ||
+            `No part found for barcode: ${barcode}`,
         );
         setPhase("error");
       }
