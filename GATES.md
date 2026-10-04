@@ -36,10 +36,10 @@ scan that only walked `master` reported clean. G1 therefore walks tags too.
   EXPECT: TAGS_ON_LINEAGE
   EVIDENCE: automatic-evidence=v1; definition-sha256=6094e70575e71c600077dc44a920f11de2446ef7837e5dcf6d7d4181f53cfa8c; exit=0; EXPECT=matched; output-sha256=2b80c5a05a6ac468e1e77c27b2d5cfd7b2f35209c022fd82a933d6c13412afef; output-bytes=23; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
 
-- [x] G5: the clean repo inherited no refs/pull/* (the reason it is clean)
-  CHECK: node .unlazy-migration-check.mjs nopulls
-  EXPECT: NO_PULL_REFS
-  EVIDENCE: automatic-evidence=v1; definition-sha256=1b91bdc0a0d84f36a8d0bc1354c807668fd72f4fe59695de4e4d44e94ae7d5dd; exit=0; EXPECT=matched; output-sha256=c87d34d728c0de8cc9676086b14b7dd6f1923588fc33e90fc03fc0ed4d0c5a8d; output-bytes=34; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
+- [x] G5: no PR ref on the clean repo carries Claude attribution
+  CHECK: node .unlazy-migration-check.mjs pullrefs
+  EXPECT: PULL_REFS_CLEAN
+  EVIDENCE: automatic-evidence=v1; definition-sha256=b30416ef184e66b10570381c3916f464107ae226348d54dcb98f74d1ad25e6f5; exit=0; EXPECT=matched; output-sha256=da1ffd6d4e6793740e5a25c307b2f4eec18a611e66edfbbb37d1c00825df6786; output-bytes=71; shell=C:\WINDOWS\system32\cmd.exe; cwd=C:\Users\tsuma\Downloads\bom tool\bom tool v1\bom-tool; path=6b48680b9ee6/78 entries
 
 - [x] G6: every non-pull ref on the old repo exists on the clean repo
   CHECK: node .unlazy-migration-check.mjs refparity
@@ -75,4 +75,12 @@ the migration pointless.
 
 G3 compares blob hashes rather than file counts: equal counts with different
 contents would pass a count check and lose data silently.
+
+G5 originally asserted the clean repo had ZERO refs/pull/*. That was a fair
+proxy on migration day -- the repo had no PRs of its own, so any PR ref could
+only have been inherited -- but it expired the moment PR #1 was opened here,
+and then reported FAIL for two refs created by our own clean merges. It now
+asserts the property that actually matters: no PR ref reaches a commit
+carrying attribution. PR refs are immutable, so one tainted head is permanent,
+which is precisely why the old repo could not be cleaned in place.
 -->
