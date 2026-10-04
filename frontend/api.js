@@ -1951,6 +1951,45 @@ api.mbom = mbomAPI;
 // its declaration -> "Cannot access 'api' before initialization", which
 // broke 13 test files at import time.
 api.workOrderOps = workOrderOpsAPI;
+
+// Manufacturing routings and process plans. The read side already had a
+// screen (enterprise-screens.jsx RoutingScreen) but it was READ-ONLY: two
+// GETs, zero POSTs, zero buttons. Routings and plans could be viewed and
+// never created, so the feature was unusable end to end.
+//
+// All four creates are json-body (pydantic models), unlike the work-order
+// operation routes next door, which bind bare scalars from the query string.
+export const manufacturingAPI = {
+  listRoutings: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/manufacturing/routings${q ? '?' + q : ''}`);
+  },
+  getRouting: (id) => apiRequest(`/manufacturing/routings/${id}`),
+  // Only name is required. status / routing_number are NOT settable: the
+  // service generates the number and now stamps status explicitly, because
+  // its raw text() INSERT bypasses the model's ORM-side default.
+  createRouting: (data) =>
+    apiRequest('/manufacturing/routings', { method: 'POST', body: JSON.stringify(data) }),
+  addRoutingOperation: (routingId, data) =>
+    apiRequest(`/manufacturing/routings/${routingId}/operations`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  listProcessPlans: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/manufacturing/process-plans${q ? '?' + q : ''}`);
+  },
+  getProcessPlan: (id) => apiRequest(`/manufacturing/process-plans/${id}`),
+  createProcessPlan: (data) =>
+    apiRequest('/manufacturing/process-plans', { method: 'POST', body: JSON.stringify(data) }),
+  addProcessPlanStep: (planId, data) =>
+    apiRequest(`/manufacturing/process-plans/${planId}/steps`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+};
+api.manufacturing = manufacturingAPI;
 window.mbomAPI = mbomAPI;
 
 // Appended for modals-extra.jsx (API Keys modal): user-scoped API key

@@ -419,9 +419,16 @@ function RoutingScreen() {
   const [routings, setRoutings] = React.useState([]);
   const [plans, setPlans] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  React.useEffect(() => {
+  // This screen was READ-ONLY: two GETs, zero POSTs, zero buttons. Routings
+  // and process plans could be listed but never created, so the feature could
+  // not be used end to end. `name` is the only required field on either
+  // create; the service generates the number and stamps the status.
+  const [creating, setCreating] = React.useState(false);
+  const [draft, setDraft] = React.useState({ name: "", description: "" });
+
+  const load = React.useCallback(() => {
     setLoading(true);
-    Promise.all([
+    return Promise.all([
       apiRequest("/manufacturing/routings").catch(() => []),
       apiRequest("/manufacturing/process-plans").catch(() => []),
     ])
@@ -435,6 +442,37 @@ function RoutingScreen() {
         setLoading(false);
       });
   }, []);
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  async function createCurrent() {
+    const name = draft.name.trim();
+    if (!name) return;
+    setCreating(true);
+    try {
+      const payload = { name, description: draft.description || null };
+      if (tab === "routings") await api.manufacturing.createRouting(payload);
+      else await api.manufacturing.createProcessPlan(payload);
+      // Re-read rather than guessing the new row: the server assigns the
+      // number and status, so an optimistic row would show values it invented.
+      await load();
+      setDraft({ name: "", description: "" });
+      toast(
+        tab === "routings"
+          ? __t("enterprise.routing.routingCreated") || "Routing created"
+          : __t("enterprise.routing.planCreated") || "Process plan created",
+        { kind: "success" },
+      );
+    } catch (e) {
+      toast(
+        (__t("common.saveFailed") || "Could not save") + ": " + (e?.message || String(e)),
+        { kind: "error" },
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
   const tabs = [
     {
       value: "routings",
@@ -452,6 +490,25 @@ function RoutingScreen() {
         description={
           __t("enterprise.routing.subtitle") ||
           "Define manufacturing routings and process plans"
+        }
+        actions={
+          <div className="flex items-center gap-8">
+            <Input
+              placeholder={
+                tab === "routings"
+                  ? __t("enterprise.routing.newRouting") || "New routing name"
+                  : __t("enterprise.routing.newPlan") || "New process plan name"
+              }
+              aria-label={__t("common.name") || "Name"}
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+            <Button onClick={createCurrent} disabled={creating || !draft.name.trim()}>
+              {creating
+                ? __t("common.saving") || "Saving…"
+                : __t("common.create") || "Create"}
+            </Button>
+          </div>
         }
       />
       <Tabs
