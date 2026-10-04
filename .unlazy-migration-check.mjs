@@ -152,14 +152,88 @@ function tags() {
 }
 
 // ------------------------------------------------------------------ pull refs
-function nopulls() {
-  const refs = [...remoteRefs(NEW_REMOTE).keys()];
-  const pulls = refs.filter((r) => r.startsWith("refs/pull/"));
-  if (pulls.length) fail(`clean repo has ${pulls.length} inherited PR ref(s): ${pulls.slice(0, 5).join(", ")}`);
-  // Positive control: the OLD repo must still have some, or this check proves nothing.
-  const oldPulls = [...remoteRefs(OLD_REMOTE).keys()].filter((r) => r.startsWith("refs/pull/"));
-  if (!oldPulls.length) fail("control failed: the old repo has no refs/pull/* either, so absence here is meaningless");
-  console.log(`NO_PULL_REFS old_has=${oldPulls.length} new_has=0`);
+// Asserts the PROPERTY, not a proxy for it.
+//
+// The first version of this check failed if the clean repo had ANY
+// refs/pull/* at all. That was a fair proxy on migration day -- the repo had
+// no PRs of its own, so any PR ref could only have been inherited -- but it
+// expired the moment we opened PR #1 here. It then reported FAIL for two refs
+// created by our own clean merges, which is a check crying wolf on the
+// healthy state it was meant to protect.
+//
+// What actually matters is that no PR ref reaches a commit carrying Claude
+// attribution. PR refs are immutable, so one tainted head is permanent --
+// that is the whole reason the old repo could not be cleaned in place.
+function pullrefs() {
+  const refs = remoteRefs(NEW_REMOTE);
+  const prRefs = [...refs.entries()].filter(([r]) => r.startsWith("refs/pull/"));
+
+  const tainted = [];
+  for (const [ref, sha] of prRefs) {
+    const commit = ensureLocal(NEW_REMOTE, ref, sha);
+    const body = git(["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", commit]);
+    if (TRAILER.test(body) || IDENTITY.test(body)) tainted.push(`${ref} -> ${commit.slice(0, 9)}`);
+  }
+
+  // Positive control: the OLD repo's PR refs MUST still trip this, or the
+  // absence above proves nothing about the matcher.
+  const oldRefs = [...remoteRefs(OLD_REMOTE).entries()].filter(([r]) =>
+    r.startsWith("refs/pull/"),
+  );
+  let controlHit = null;
+  for (const [ref, sha] of oldRefs) {
+    let body;
+    try {
+      body = git(["log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B", sha]);
+    } catch {
+      continue; // object not fetched locally; try the next one
+    }
+    if (TRAILER.test(body) || IDENTITY.test(body)) {
+      controlHit = `${ref} -> ${sha.slice(0, 9)}`;
+      break;
+    }
+  }
+  if (!controlHit) {
+    fail(
+      "positive control found no tainted PR ref on the OLD repo. Either its refs " +
+        "are not fetched locally (git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*') " +
+        "or the matcher is broken -- either way a clean verdict here is meaningless.",
+    );
+  }
+
+  if (tainted.length) {
+    fail(
+      `${tainted.length} PR ref(s) on the clean repo carry attribution: ${tainted.join(", ")}. ` +
+        "PR refs are immutable, so this cannot be rewritten away.",
+    );
+  }
+  console.log(
+    `PULL_REFS_CLEAN own=${prRefs.length} tainted=0 control=${controlHit}`,
+  );
+}
+
+// Make a commit available locally so its message can be read. Fetching the
+// exact ref is cheap and deterministic; failing loudly beats silently skipping
+// a ref we could not inspect, which would read as "clean".
+function ensureLocal(remote, ref, sha) {
+  try {
+    git(["cat-file", "-e", sha + "^{commit}"]);
+    return sha;
+  } catch {
+    try {
+      git(["fetch", "--quiet", remote, `${ref}:refs/tmp/unlazy-check`]);
+      const resolved = git(["rev-parse", "refs/tmp/unlazy-check"]).trim();
+      try {
+        git(["update-ref", "-d", "refs/tmp/unlazy-check"]);
+      } catch {
+        /* leftover temp ref is harmless */
+      }
+      return resolved;
+    } catch (e) {
+      fail(`cannot inspect ${ref} (${sha.slice(0, 9)}): ${e.message}`);
+      return sha;
+    }
+  }
 }
 
 // --------------------------------------------------------------- ref parity
@@ -210,7 +284,7 @@ function contributors() {
   console.log(`ONE_CONTRIBUTOR ${logins[0]} commits=${d[0].contributions}`);
 }
 
-const table = { attribution, authors, content, tags, nopulls, refparity, protection, contributors };
+const table = { attribution, authors, content, tags, pullrefs, refparity, protection, contributors };
 const cmd = process.argv[2];
 if (!table[cmd]) {
   console.error("usage: .unlazy-migration-check.mjs <" + Object.keys(table).join("|") + ">");
