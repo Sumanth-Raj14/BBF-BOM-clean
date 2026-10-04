@@ -303,6 +303,20 @@ export const authAPI = {
       body: JSON.stringify({ password, totp_code: totpCode }),
     }),
 
+  // Completes a LOGIN that returned {mfa_required:true, temp_token}. Without
+  // this the MFA enrolment UI is a lockout: /auth/login returns no
+  // access_token for an MFA-enabled user, the sign-in path treats that as a
+  // failure, and the user is told their correct credentials were rejected.
+  //
+  // The handler reads the RAW request json (not a pydantic model), so the
+  // field names temp_token / code are load-bearing and unvalidated.
+  mfaChallenge: (tempToken, code) =>
+    apiRequest('/auth/mfa/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ temp_token: tempToken, code }),
+      credentials: 'include',
+    }),
+
   // POST /auth/change-password { current_password, new_password }
   changePassword: (currentPassword, newPassword) =>
     apiRequest('/auth/change-password', {
