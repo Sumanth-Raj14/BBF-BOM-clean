@@ -6,6 +6,7 @@ import { ComplianceReportPanel } from "../components/ComplianceReportPanel.jsx";
 import ExportDialog from "../components/modals/ExportDialog.jsx";
 import UomConverterModal from "../components/modals/UomConverterModal.jsx";
 import BomAccessModal from "../components/modals/BomAccessModal.jsx";
+import BomMergePreviewModal from "../components/modals/BomMergePreviewModal.jsx";
 import {
   BomEditor,
   BomShell,
@@ -53,6 +54,9 @@ function BomEditorScreen({
   const [exportOpen, setExportOpen] = React.useState(false);
   const [uomConverterOpen, setUomConverterOpen] = React.useState(false);
   const [accessOpen, setAccessOpen] = React.useState(false);
+  // POST /enterprise/bom/merge is a PREVIEW: it persists nothing, so the
+  // entry and the modal both say so rather than offering a "Merge" action.
+  const [mergeOpen, setMergeOpen] = React.useState(false);
 
   const allCats = [
     "Assembly",
@@ -180,6 +184,11 @@ function BomEditorScreen({
                       icon: <Icon.Shield size={11} />,
                       label: __t("bomAccess.title") || "BOM access",
                       onClick: () => setAccessOpen(true),
+                    },
+                    {
+                      label:
+                        __t("bomMerge.menu") || "Merge with other BOMs (preview)",
+                      onClick: () => setMergeOpen(true),
                     },
                   ]
                 : []),
@@ -578,6 +587,11 @@ function BomEditorScreen({
       <UomConverterModal
         open={uomConverterOpen}
         onClose={() => setUomConverterOpen(false)}
+      />
+      <BomMergePreviewModal
+        open={mergeOpen}
+        bomId={bomId}
+        onClose={() => setMergeOpen(false)}
       />
       <BomAccessModal
         open={accessOpen}

@@ -1990,6 +1990,72 @@ export const manufacturingAPI = {
     }),
 };
 api.manufacturing = manufacturingAPI;
+
+// Enterprise utilities that had no wrapper.
+export const enterpriseExtraAPI = {
+  // PREVIEW ONLY. The handler reads the source BOMs, folds duplicates in
+  // memory and RETURNS the result — it contains no INSERT, no db.add and no
+  // commit, so nothing is saved. Any caller that reports "merged" is lying.
+  //
+  // conflict_resolution has exactly two meaningful values. The handler is an
+  // if/elif on "keep_highest_qty" and "sum" with NO else: any other string
+  // silently takes neither branch, so the duplicate keeps the FIRST BOM's
+  // quantity while the response echoes the bad value back as though it were
+  // honoured. Callers must therefore offer only these two.
+  MERGE_STRATEGIES: ['keep_highest_qty', 'sum'],
+  previewBomMerge: (sourceBomIds, targetName, conflictResolution = 'keep_highest_qty') =>
+    apiRequest('/enterprise/bom/merge', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_bom_ids: sourceBomIds,
+        target_name: targetName,
+        conflict_resolution: conflictResolution,
+      }),
+    }),
+
+  // entity_type is a BARE SCALAR on a POST, so FastAPI binds it from the
+  // QUERY STRING. Sending {"entity_type": ...} as a body 422s.
+  generateNumber: (entityType) =>
+    apiRequest(`/enterprise/auto-number-schemes/generate?entity_type=${encodeURIComponent(entityType)}`, {
+      method: 'POST',
+    }),
+  listNumberSchemes: () => apiRequest('/enterprise/auto-number-schemes'),
+  createNumberScheme: (data) =>
+    apiRequest('/enterprise/auto-number-schemes', { method: 'POST', body: JSON.stringify(data) }),
+
+  // All three are query params, not a body.
+  convertCurrency: (amount, from, to) =>
+    apiRequest(
+      `/enterprise/exchange-rates/convert?${new URLSearchParams({
+        amount: String(amount),
+        from_currency: from,
+        to_currency: to,
+      }).toString()}`,
+    ),
+  listExchangeRates: () => apiRequest('/enterprise/exchange-rates'),
+  createExchangeRate: (data) =>
+    apiRequest('/enterprise/exchange-rates', { method: 'POST', body: JSON.stringify(data) }),
+
+  listComplianceCertificates: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/enterprise/compliance-certificates${q ? '?' + q : ''}`);
+  },
+  createComplianceCertificate: (data) =>
+    apiRequest('/enterprise/compliance-certificates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  listCustomAttributes: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/enterprise/custom-attributes${q ? '?' + q : ''}`);
+  },
+  createCustomAttribute: (data) =>
+    apiRequest('/enterprise/custom-attributes', { method: 'POST', body: JSON.stringify(data) }),
+  deleteCustomAttribute: (attrId) =>
+    apiRequest(`/enterprise/custom-attributes/${attrId}`, { method: 'DELETE' }),
+};
+api.enterpriseExtra = enterpriseExtraAPI;
 window.mbomAPI = mbomAPI;
 
 // Appended for modals-extra.jsx (API Keys modal): user-scoped API key
