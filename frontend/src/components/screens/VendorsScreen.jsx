@@ -27,6 +27,8 @@ export default function VendorsScreen({ data, openModal }) {
   const [error, setError] = React.useState(null);
   const [riskFilter, setRiskFilter] = React.useState("All");
   const [vSearch, setVSearch] = React.useState("");
+  // Vendor apiIds ticked for bulk delete.
+  const [selected, setSelected] = React.useState(() => new Set());
 
   const deriveRisk = (lead) =>
     lead >= 30 ? "High" : lead >= 14 ? "Med" : "Low";
@@ -198,6 +200,47 @@ export default function VendorsScreen({ data, openModal }) {
   // shared STATUS_TONES map, so resolve explicitly).
   const riskTone = (r) => (r === "Low" ? "success" : r === "Med" ? "warning" : "danger");
 
+  // Bulk delete. POST /vendors/bulk-delete was unreachable: the table had no
+  // multi-select at all. Only ticked vendors that are still VISIBLE are sent,
+  // so narrowing the filter after ticking can never delete a row the user can
+  // no longer see.
+  const selectable = filtered.filter((v) => v.apiId != null);
+  const visibleSelected = selectable.filter((v) => selected.has(v.apiId));
+  const allSelected = selectable.length > 0 && visibleSelected.length === selectable.length;
+  const toggleOne = (id) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected(allSelected ? new Set() : new Set(selectable.map((v) => v.apiId)));
+  const deleteSelected = async () => {
+    const ids = visibleSelected.map((v) => v.apiId);
+    if (!ids.length) return;
+    if (
+      !window.confirm(
+        (__t("vendor.confirmBulkDelete") ||
+          "Permanently delete {n} vendor(s)? This cannot be undone.").replace("{n}", String(ids.length)),
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await api.vendors.bulkDelete(ids);
+      setSelected(new Set());
+      toast(`${res?.deleted ?? ids.length} ${__t("vendor.deleted") || "vendor(s) deleted"}`, {
+        kind: "success",
+      });
+      load();
+    } catch (e) {
+      toast(`${__t("vendor.deleteFailed") || "Could not delete"}: ${e?.message || e}`, {
+        kind: "error",
+      });
+    }
+  };
+
   return (
     <div className="screen-wrap">
       <ScreenHeader
@@ -285,10 +328,33 @@ export default function VendorsScreen({ data, openModal }) {
         }
       />
 
+      {visibleSelected.length > 0 && (
+        <div className="flex items-center gap-8 mb-8" role="region" aria-label={__t("vendor.selection") || "Selected vendors"}>
+          <span className="fs-12">
+            {visibleSelected.length} {__t("vendor.selected") || "selected"}
+          </span>
+          <Button variant="secondary" size="sm" onClick={deleteSelected}>
+            <Icon.Trash size={11} /> {__t("vendor.deleteSelected") || "Delete selected"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+            {__t("vendor.clearSelection") || "Clear selection"}
+          </Button>
+        </div>
+      )}
+
       <div className="card overflow-vis" data-density="dense">
         <table className="bom-table table-auto">
           <thead>
             <tr>
+              <th scope="col" className="w-32">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  disabled={!selectable.length}
+                  aria-label={__t("vendor.selectAll") || "Select all vendors"}
+                />
+              </th>
               <th className="pl-16" scope="col">{__t("vendor.name") || "Vendor"}</th>
               <th scope="col">{__t("vendor.country") || "Country"}</th>
               <th scope="col">{__t("vendor.terms") || "Terms"}</th>
@@ -306,7 +372,7 @@ export default function VendorsScreen({ data, openModal }) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="p-0">
+                <td colSpan={11} className="p-0">
                   <EmptyState
                     title={__t("common.loading") || "Loading vendors…"}
                   />
@@ -314,7 +380,7 @@ export default function VendorsScreen({ data, openModal }) {
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={10} className="p-0">
+                <td colSpan={11} className="p-0">
                   <EmptyState
                     title={error}
                     actions={
@@ -327,7 +393,7 @@ export default function VendorsScreen({ data, openModal }) {
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={10} className="p-0">
+                <td colSpan={11} className="p-0">
                   <EmptyState
                     title={
                       vSearch || riskFilter !== "All"
@@ -360,6 +426,16 @@ export default function VendorsScreen({ data, openModal }) {
                   style={{ opacity: v.active === false ? 0.5 : 1 }}
                   className="cursor-pointer"
                 >
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {v.apiId != null && (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(v.apiId)}
+                        onChange={() => toggleOne(v.apiId)}
+                        aria-label={`${__t("vendor.select") || "Select"} ${v.name}`}
+                      />
+                    )}
+                  </td>
                   <td className="pl-16">
                     <div className="flex items-center gap-8">
                       <span

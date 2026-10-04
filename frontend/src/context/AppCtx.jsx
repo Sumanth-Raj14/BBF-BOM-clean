@@ -488,6 +488,18 @@ function AppCtxProvider({ children }) {
     if (failure) throw failure.reason || new Error("Request failed");
   }, []);
 
+  // POST /notifications/bulk-delete had no caller, so notifications could be
+  // marked read but never removed and the list only grew. The server scopes it
+  // to the caller's own notifications. Local state drops them only after the
+  // server confirmed, so a failure leaves the list honest.
+  const clearNotifications = React.useCallback(async (ids) => {
+    const targets = (Array.isArray(ids) ? ids : [ids]).filter((id) => id != null);
+    if (targets.length === 0) return 0;
+    const res = await api.notifications.bulkDelete(targets);
+    setNotifications((prev) => prev.filter((n) => !targets.includes(n.id)));
+    return res?.deleted ?? targets.length;
+  }, []);
+
   // LOCKED DECISIONS UI #6: data grids (Parts, BOM) default to DENSE, the rest
   // of the shell stays at the user's density (default 'normal'). When the tweak
   // sits at its 'normal' default we bump grids to 'dense'; an explicit user
@@ -675,6 +687,7 @@ function AppCtxProvider({ children }) {
     notifications,
     setNotifications,
     markNotificationsRead,
+    clearNotifications,
     savedViews,
     setSavedViews,
     project,

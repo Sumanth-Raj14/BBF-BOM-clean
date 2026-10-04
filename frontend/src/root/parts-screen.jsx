@@ -123,12 +123,18 @@ function PartsScreen({ openModal, onOpenDetail }) {
     () => buildCatalog(rows, ctx?.apiParts),
     [rows, ctx?.apiParts],
   );
+  // PNs deleted on the server this session, hidden until the next parts load
+  // (same reason as localOverrides: ctx.apiParts has no setter).
+  const [locallyDeleted, setLocallyDeleted] = React.useState(() => new Set());
   const allParts = React.useMemo(() => {
-    if (!Object.keys(localOverrides).length) return baseParts;
-    return baseParts.map((p) =>
+    const live = locallyDeleted.size
+      ? baseParts.filter((p) => !locallyDeleted.has(p.pn))
+      : baseParts;
+    if (!Object.keys(localOverrides).length) return live;
+    return live.map((p) =>
       localOverrides[p.pn] ? { ...p, ...localOverrides[p.pn] } : p,
     );
-  }, [baseParts, localOverrides]);
+  }, [baseParts, localOverrides, locallyDeleted]);
   // Persist a patch to the real Part record when this catalog entry is
   // backed by one (p.partId, set by convertApiPartsToTree for anything
   // sourced from api.parts.list()). Falls back to a local-only patch of the
@@ -751,6 +757,54 @@ function PartsScreen({ openModal, onOpenDetail }) {
               >
                 <Icon.Trash size={12} />{" "}
                 {__t("parts.markObsolete") || "Mark obsolete"}
+              </button>
+              <button
+                onClick={async () => {
+                  const targets = allParts.filter((p) => selectedIds.has(p.pn));
+                  // Only parts backed by a server record can be deleted there;
+                  // demo/offline rows have no id to send.
+                  const ids = targets.map((p) => p.partId).filter((id) => id != null);
+                  const skipped = targets.length - ids.length;
+                  if (!ids.length) {
+                    toast(
+                      __t("parts.nothingToDelete") ||
+                        "None of the selected parts are saved on the server.",
+                      { kind: "warn" },
+                    );
+                    return;
+                  }
+                  if (
+                    !window.confirm(
+                      (__t("parts.confirmBulkDelete") ||
+                        "Permanently delete {n} part(s)? This cannot be undone.").replace(
+                        "{n}",
+                        String(ids.length),
+                      ),
+                    )
+                  ) {
+                    return;
+                  }
+                  try {
+                    const res = await api.parts.bulkDelete(ids);
+                    const deletedPns = targets
+                      .filter((p) => p.partId != null)
+                      .map((p) => p.pn);
+                    setLocallyDeleted((prev) => new Set([...prev, ...deletedPns]));
+                    setSelectedIds(new Set());
+                    toast(
+                      `${res?.deleted ?? ids.length} ${__t("parts.deleted") || "part(s) deleted"}` +
+                        (skipped ? ` · ${skipped} ${__t("parts.notOnServer") || "not on the server, left as is"}` : ""),
+                      { kind: "success" },
+                    );
+                  } catch (e) {
+                    toast(
+                      `${__t("parts.deleteFailed") || "Could not delete"}: ${e?.message || e}`,
+                      { kind: "error" },
+                    );
+                  }
+                }}
+              >
+                <Icon.Trash size={12} /> {__t("common.delete") || "Delete"}
               </button>
               <button
                 className="x"

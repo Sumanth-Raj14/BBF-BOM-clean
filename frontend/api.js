@@ -358,7 +358,11 @@ export const partsAPI = {
     const query = new URLSearchParams(params).toString();
     return apiRequest(`/parts${query ? '?' + query : ''}`);
   },
-  
+
+  // Server-side, tenant-scoped; returns { deleted } (the number removed).
+  bulkDelete: (ids) =>
+    apiRequest('/parts/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
+
   get: (id) => apiRequest(`/parts/${id}`),
   
   create: (part) => 
@@ -408,7 +412,11 @@ export const vendorsAPI = {
     const query = new URLSearchParams(params).toString();
     return apiRequest(`/vendors${query ? '?' + query : ''}`);
   },
-  
+
+  // Server-side, tenant-scoped; returns { deleted } (the number removed).
+  bulkDelete: (ids) =>
+    apiRequest('/vendors/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
+
   get: (id) => apiRequest(`/vendors/${id}`),
   
   create: (vendor) => 
@@ -604,8 +612,12 @@ export const notificationsAPI = {
       body: JSON.stringify(data),
     }),
   
-  delete: (id) => 
+  delete: (id) =>
     apiRequest(`/notifications/${id}`, { method: 'DELETE' }),
+
+  // Only ever deletes the caller's own notifications (scoped by userId).
+  bulkDelete: (ids) =>
+    apiRequest('/notifications/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
 };
 
 // Comments API
